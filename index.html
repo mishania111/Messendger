@@ -34,6 +34,11 @@ form{background:var(--bar);display:flex;align-items:center;gap:4px;padding:6px 8
 .login input{padding:12px;border-radius:12px;border:1px solid var(--bd);background:var(--bar);color:var(--tx);font:inherit}
 .login .go{background:var(--ac);color:#fff;padding:12px;border-radius:12px;font-weight:600}
 .login p{color:var(--sub);margin:0;font-size:14px}
+#stk{max-height:40vh;overflow-y:auto}
+#stk img{width:64px;height:64px;object-fit:contain;pointer-events:none;-webkit-touch-callout:none;user-select:none}
+#stk button{touch-action:manipulation;-webkit-user-select:none;user-select:none}
+.m.st img{width:150px;max-width:55vw;border-radius:0}
+.add{font-size:34px;width:64px;height:64px;color:var(--ac)}
 </style>
 </head>
 <body>
@@ -41,7 +46,7 @@ form{background:var(--bar);display:flex;align-items:center;gap:4px;padding:6px 8
 <script type="module">
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {getAuth,signInAnonymously} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import {getFirestore,collection,addDoc,query,orderBy,limit,onSnapshot} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import {getFirestore,collection,addDoc,doc,setDoc,deleteDoc,query,orderBy,limit,onSnapshot} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBoWv-mPq93B7o3HSOwLB0uAh6sleDxpG8",
@@ -51,12 +56,14 @@ const firebaseConfig = {
   messagingSenderId: "444765553703",
   appId: "1:444765553703:web:7aff1a18d6471afb1e7a02"
 };
+const NTFY_URL="https://ntfy.sh";
+const NTFY_PREVIEW=false; // true: в уведомлении виден текст сообщения (он пройдёт через сервер ntfy.sh)
 
 const $=s=>document.querySelector(s), app=$("#app");
 const LS={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
-const STICKERS=["😀","😂","🥰","😎","🤔","😭","🔥","❤️","👍","👎","🎉","🙏","😴","🤯","🥳","😡","🐱","🐶","🦄","🍕","☕","🚀","💩","👀"];
-let db,uid,unsub,name=LS.get("name")||"",room=LS.get("room")||"";
+let db,uid,unsubs=[],name=LS.get("name")||"",room=LS.get("room")||"";
 const el=(t,p,c)=>{const e=document.createElement(t);Object.assign(e,p||{});(c||[]).forEach(x=>e.append(x));return e};
+const myTopic=LS.get("topic")||(()=>{const t="chat"+crypto.randomUUID().replace(/-/g,"").slice(0,20);LS.set("topic",t);return t})();
 
 function login(){
   app.innerHTML="";
@@ -70,46 +77,84 @@ function login(){
     el("p",{textContent:"Кто знает код, тот в чате. Чем длиннее и случайнее код, тем надёжнее."}),n,r,b]));
 }
 
+function loadImg(f){return new Promise((ok,no)=>{const im=new Image();im.onload=()=>ok(im);im.onerror=no;im.src=URL.createObjectURL(f)})}
+async function shrink(f){const im=await loadImg(f),k=Math.min(1,900/Math.max(im.width,im.height));
+  const c=el("canvas",{width:Math.round(im.width*k),height:Math.round(im.height*k)});
+  c.getContext("2d").drawImage(im,0,0,c.width,c.height);return c.toDataURL("image/jpeg",.7)}
+async function toSticker(f){const im=await loadImg(f);
+  for(const mx of [256,192,128]){
+    const k=Math.min(1,mx/Math.max(im.width,im.height));
+    const c=el("canvas",{width:Math.round(im.width*k),height:Math.round(im.height*k)});
+    c.getContext("2d").drawImage(im,0,0,c.width,c.height);
+    let u=c.toDataURL("image/webp",.85);if(!u.startsWith("data:image/webp"))u=c.toDataURL("image/png");
+    if(u.length<140000)return u}
+  throw new Error("big")}
+
 function chat(){
-  app.innerHTML="";
+  unsubs.forEach(u=>u());unsubs=[];app.innerHTML="";
+  let members=[],stickers={},docs=[];
   const msgs=el("div",{id:"msgs"}), stk=el("div",{id:"stk"});
   const txt=el("input",{id:"txt",placeholder:"Сообщение",autocomplete:"off"});
   const file=el("input",{type:"file",accept:"image/*",hidden:true});
-  const hd=el("header",{},[el("button",{className:"ico",textContent:"←",onclick:()=>{unsub&&unsub();login()}}),
-    el("b",{},[document.createTextNode("# "+room),el("small",{textContent:"вы: "+name})])]);
+  const sfile=el("input",{type:"file",accept:"image/*",hidden:true});
+  const hd=el("header",{},[el("button",{className:"ico",textContent:"←",onclick:()=>{unsubs.forEach(u=>u());unsubs=[];login()}}),
+    el("b",{},[document.createTextNode("# "+room),el("small",{textContent:"вы: "+name})]),
+    el("button",{className:"ico",textContent:"🔔",onclick:()=>{
+      try{navigator.clipboard.writeText(myTopic)}catch(e){}
+      alert("Уведомления через ntfy:\n1) Установи приложение ntfy.\n2) Нажми «+» и введи тему (скопирована):\n\n"+myTopic+"\n\n3) Сервер оставь по умолчанию (ntfy.sh).")}})]);
   const form=el("form",{onsubmit:e=>{e.preventDefault();const v=txt.value.trim();if(!v)return;txt.value="";send({k:"t",x:v})}},[
     el("button",{type:"button",className:"ico",textContent:"📎",onclick:()=>file.click()}),
     el("button",{type:"button",className:"ico",textContent:"😊",onclick:()=>stk.classList.toggle("on")}),
-    txt,el("button",{id:"go",textContent:"➤"}),file]);
-  STICKERS.forEach(s=>stk.append(el("button",{type:"button",textContent:s,onclick:()=>{send({k:"s",x:s});stk.classList.remove("on")}})));
+    txt,el("button",{id:"go",textContent:"➤"}),file,sfile]);
   app.append(hd,msgs,stk,form);
 
-  const col=collection(db,"chats",room,"messages");
-  const send=o=>addDoc(col,{...o,u:uid,n:name,ts:Date.now()}).catch(()=>alert("Не удалось отправить"));
+  const mcol=collection(db,"chats",room,"messages"),scol=collection(db,"chats",room,"stickers"),bcol=collection(db,"chats",room,"members");
+  setDoc(doc(db,"chats",room,"members",uid),{n:name,t:myTopic,ts:Date.now()}).catch(()=>{});
+
+  function notify(o){
+    const body=o.k==="i"?"📷 Фото":o.k==="t"?(NTFY_PREVIEW?o.x:"Новое сообщение"):"Стикер";
+    members.filter(m=>m.id!==uid&&m.t).forEach(m=>
+      fetch(NTFY_URL,{method:"POST",body:JSON.stringify({topic:m.t,title:name,message:body,click:location.href.split("#")[0]})}).catch(()=>{}));
+  }
+  function send(o){addDoc(mcol,{...o,u:uid,n:name,ts:Date.now()}).then(()=>notify(o)).catch(()=>alert("Не удалось отправить"))}
 
   file.onchange=async()=>{const f=file.files[0];file.value="";if(!f)return;
     try{send({k:"i",x:await shrink(f)})}catch(e){alert("Не удалось обработать фото")}};
+  sfile.onchange=async()=>{const f=sfile.files[0];sfile.value="";if(!f)return;
+    try{await addDoc(scol,{x:await toSticker(f),u:uid,ts:Date.now()})}catch(e){alert("Не удалось добавить стикер")}};
 
-  unsub=onSnapshot(query(col,orderBy("ts"),limit(200)),s=>{
+  function renderStickers(){
+    stk.innerHTML="";
+    stk.append(el("button",{type:"button",className:"add",textContent:"＋",onclick:()=>sfile.click()}));
+    Object.entries(stickers).forEach(([id,s])=>{
+      let tm=null,fired=false;
+      const b=el("button",{type:"button"},[el("img",{src:s.x,draggable:false})]);
+      b.onpointerdown=()=>{fired=false;tm=setTimeout(()=>{fired=true;
+        if(s.u===uid){if(confirm("Удалить стикер?"))deleteDoc(doc(db,"chats",room,"stickers",id)).catch(()=>{})}
+        else alert("Удалить можно только свой стикер")},600)};
+      b.onpointerup=b.onpointerleave=b.onpointercancel=()=>{clearTimeout(tm)};
+      b.oncontextmenu=e=>e.preventDefault();
+      b.onclick=()=>{if(fired){fired=false;return}send({k:"g",x:id});stk.classList.remove("on")};
+      stk.append(b)});
+  }
+  function render(){
     const bottom=msgs.scrollHeight-msgs.scrollTop-msgs.clientHeight<120;
     msgs.innerHTML="";
-    s.docs.forEach(d=>{const m=d.data(),me=m.u===uid;
-      const b=el("div",{className:"m"+(me?" me":"")+(m.k==="s"?" st":"")});
+    docs.forEach(d=>{const m=d.data(),me=m.u===uid;
+      const b=el("div",{className:"m"+(me?" me":"")+(m.k==="s"||m.k==="g"?" st":"")});
       if(!me&&m.k!=="s")b.append(el("div",{className:"n",textContent:String(m.n||"")}));
       if(m.k==="i"&&String(m.x).startsWith("data:image/"))b.append(el("img",{src:m.x}));
+      else if(m.k==="g"){const s=stickers[m.x];b.append(s?el("img",{src:s.x}):document.createTextNode("[стикер удалён]"))}
       else b.append(document.createTextNode(String(m.x)));
       b.append(el("div",{className:"t",textContent:new Date(m.ts).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}));
       msgs.append(b)});
-    if(bottom||s.size<=30)msgs.scrollTop=msgs.scrollHeight;
-  },e=>alert("Нет доступа к чату: "+e.code));
+    if(bottom||docs.length<=30)msgs.scrollTop=msgs.scrollHeight;
+  }
+  renderStickers();
+  unsubs.push(onSnapshot(query(mcol,orderBy("ts"),limit(200)),s=>{docs=s.docs;render()},e=>alert("Нет доступа к чату: "+e.code)));
+  unsubs.push(onSnapshot(query(scol,orderBy("ts"),limit(60)),s=>{stickers={};s.docs.forEach(d=>stickers[d.id]=d.data());renderStickers();render()},()=>{}));
+  unsubs.push(onSnapshot(bcol,s=>{members=s.docs.map(d=>({id:d.id,...d.data()}))},()=>{}));
 }
-
-// Фото сжимаются и хранятся прямо в сообщении (бесплатно, без Firebase Storage)
-function shrink(f){return new Promise((ok,no)=>{const im=new Image();
-  im.onload=()=>{const k=Math.min(1,900/Math.max(im.width,im.height));
-    const c=el("canvas",{width:Math.round(im.width*k),height:Math.round(im.height*k)});
-    c.getContext("2d").drawImage(im,0,0,c.width,c.height);ok(c.toDataURL("image/jpeg",.7))};
-  im.onerror=no;im.src=URL.createObjectURL(f)})}
 
 try{
   const a=initializeApp(firebaseConfig);db=getFirestore(a);
