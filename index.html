@@ -115,7 +115,7 @@ try{
   const a=initializeApp(firebaseConfig);db=getFirestore(a);
   const cred=await signInAnonymously(getAuth(a));uid=cred.user.uid;
   name&&room.length>=6?chat():login();
-}catch(e){app.innerHTML='<div class="login"><p>Не удалось подключиться к Firebase. Проверь firebaseConfig и что включён анонимный вход.</p></div>'}
+}catch(e){app.innerHTML='';app.append(el("div",{className:"login"},[el("p",{textContent:"Не удалось подключиться к Firebase."}),el("p",{textContent:"Код ошибки: "+(e.code||"нет")+" | "+(e.message||String(e))})]))}
 </script>
 </body>
 </html>
