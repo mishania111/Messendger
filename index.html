@@ -58,6 +58,15 @@ form{background:var(--bar);display:flex;align-items:center;gap:4px;padding:6px 8
 .btn{background:var(--ac);color:#fff;padding:11px;border-radius:12px;font-weight:600;text-align:center}
 .btn.g{background:var(--bg);color:var(--tx)}.btn.r{background:#d9433b}
 .box h3{margin:0}.box .c{display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center}
+#typ{padding:3px 14px;font-size:13px;color:var(--sub);background:var(--bar)}#typ:empty{display:none}
+#srch{display:none;padding:6px 10px;background:var(--bar);border-bottom:1px solid var(--bd)}
+#srch input{width:100%;padding:8px 12px;border-radius:14px;border:0;outline:0;background:var(--bg);color:var(--tx);font:inherit}
+#rbar{display:none;align-items:center;gap:8px;padding:6px 12px;background:var(--bar);border-top:1px solid var(--bd);border-left:3px solid var(--ac)}
+.rt{flex:1;min-width:0}.rt b{color:var(--ac);font-size:13px}.rt div{color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px}
+.q{border-left:3px solid var(--ac);padding:2px 8px;margin-bottom:3px;background:#0000000d;border-radius:4px;font-size:14px;cursor:pointer;text-align:left}
+.q b{color:var(--ac);font-size:13px;display:block}.q div{color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60vw}
+.rx{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px}.rx button{background:var(--bg);border-radius:10px;padding:1px 8px;font-size:14px}.rx button.me{background:var(--ac);color:#fff}
+.mr.fl .m{outline:2px solid var(--ac)}
 </style>
 </head>
 <body>
@@ -65,7 +74,7 @@ form{background:var(--bar);display:flex;align-items:center;gap:4px;padding:6px 8
 <script type="module">
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {getAuth,signInAnonymously} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import {getFirestore,collection,addDoc,doc,setDoc,deleteDoc,query,orderBy,limit,onSnapshot} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import {getFirestore,collection,addDoc,doc,setDoc,updateDoc,deleteDoc,arrayUnion,arrayRemove,FieldPath,query,orderBy,limit,onSnapshot} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBoWv-mPq93B7o3HSOwLB0uAh6sleDxpG8",
@@ -161,19 +170,23 @@ function home(){view="home";cur=null;unsubs.forEach(u=>u());unsubs=[];chipsEl=nu
 function openChat(room){
   if(!profile.n){editProfile();return}
   unsubs.forEach(u=>u());unsubs=[];app.innerHTML="";cur=room;view="chat";listEl=null;
-  const ch=chats.find(x=>x.c===room);let mem={},stickers={},docs=[];
+  const ch=chats.find(x=>x.c===room);let mem={},stickers={},docs=[],q="",replyTo=null,ty={},firstM=true,lastTy=0;
   const msgs=el("div",{id:"msgs"}),stk=el("div",{id:"stk"});chipsEl=el("div",{className:"chips"});
-  const txt=el("input",{id:"txt",placeholder:"Сообщение",autocomplete:"off"});
+  const typEl=el("div",{id:"typ"}),rbar=el("div",{id:"rbar"});
+  const sIn=el("input",{placeholder:"Поиск по чату",oninput:()=>{q=sIn.value.trim().toLowerCase();render()}});
+  const search=el("div",{id:"srch"},[sIn]);
+  const txt=el("input",{id:"txt",placeholder:"Сообщение",autocomplete:"off",oninput:()=>typing()});
   const file=el("input",{type:"file",accept:"image/*",hidden:true}),sfile=el("input",{type:"file",accept:"image/*",hidden:true});
   const hd=el("header",{},[el("button",{className:"ico",textContent:"←",onclick:home}),
     el("button",{className:"ttl",textContent:ch?ch.t:room,onclick:showMembers}),
+    el("button",{className:"ico",textContent:"🔍",onclick:()=>{const on=search.style.display==="block";search.style.display=on?"none":"block";if(on){q="";sIn.value="";render()}else sIn.focus()}}),
     el("button",{className:"ico",textContent:"🔔",onclick:()=>{try{navigator.clipboard.writeText(myTopic)}catch(e){}
       alert("Уведомления через ntfy:\n1) Установи приложение ntfy.\n2) Нажми «+» и введи тему (скопирована):\n\n"+myTopic+"\n\n3) Сервер оставь по умолчанию (ntfy.sh).")}})]);
   const form=el("form",{onsubmit:e=>{e.preventDefault();const v=txt.value.trim();if(!v)return;txt.value="";send({k:"t",x:v})}},[
     el("button",{type:"button",className:"ico",textContent:"📎",onclick:()=>file.click()}),
     el("button",{type:"button",className:"ico",textContent:"😊",onclick:()=>stk.classList.toggle("on")}),
     txt,el("button",{id:"go",textContent:"➤"}),file,sfile]);
-  app.append(hd,chipsEl,msgs,stk,form);renderChips();watch(room);
+  app.append(hd,chipsEl,search,typEl,msgs,rbar,stk,form);renderChips();watch(room);
   const mcol=collection(db,"chats",room,"messages"),scol=collection(db,"chats",room,"stickers"),bcol=collection(db,"chats",room,"members");
   syncProfile(room);
 
@@ -183,7 +196,7 @@ function openChat(room){
     box.append(btn("Скопировать приглашение",()=>{try{navigator.clipboard.writeText(inviteLink(room))}catch(e){}alert("Ссылка скопирована. Отправляй только своим.")},"g"),btn("Закрыть",close,"g"))})}
   function notify(o){const body=o.k==="i"?"📷 Фото":o.k==="t"?(NTFY_PREVIEW?o.x:"Новое сообщение"):"Стикер";
     Object.values(mem).filter(m=>m.id!==uid&&m.t).forEach(m=>fetch(NTFY_URL,{method:"POST",body:JSON.stringify({topic:m.t,title:profile.n,message:body,click:inviteLink(room)})}).catch(()=>{}))}
-  function send(o){addDoc(mcol,{...o,u:uid,n:profile.n,ts:Date.now()}).then(()=>notify(o)).catch(()=>alert("Не удалось отправить"))}
+  function send(o){addDoc(mcol,{...o,...(replyTo?{rp:replyTo}:{}),u:uid,n:profile.n,ts:Date.now()}).then(()=>notify(o)).catch(()=>alert("Не удалось отправить"));setReply(null)}
   file.onchange=async()=>{const f=file.files[0];file.value="";if(!f)return;try{send({k:"i",x:await shrink(f)})}catch(e){alert("Не удалось обработать фото")}};
   sfile.onchange=async()=>{const f=sfile.files[0];sfile.value="";if(!f)return;try{await addDoc(scol,{x:await toSticker(f),u:uid,ts:Date.now()})}catch(e){alert("Не удалось добавить стикер")}};
 
@@ -195,33 +208,13 @@ function openChat(room){
       b.onpointerup=b.onpointerleave=b.onpointercancel=()=>clearTimeout(tm);
       b.oncontextmenu=e=>e.preventDefault();
       b.onclick=()=>{if(fired){fired=false;return}send({k:"g",x:id});stk.classList.remove("on")};stk.append(b)})}
-  function render(){const bottom=msgs.scrollHeight-msgs.scrollTop-msgs.clientHeight<120;msgs.innerHTML="";
-    docs.forEach(d=>{const m=d.data(),me=m.u===uid,p=mem[m.u]||{n:m.n,a:"",b:""};
+  function snip(m){return m.k==="i"?"📷 Фото":m.k==="g"?"Стикер":String(m.x).slice(0,80)}
+  function render(){const bottom=msgs.scrollHeight-msgs.scrollTop-msgs.clientHeight<120,st=msgs.scrollTop;msgs.innerHTML="";
+    const list=q?docs.filter(d=>{const m=d.data();return (m.k==="t"||m.k==="s")&&String(m.x).toLowerCase().includes(q)}):docs;
+    if(q&&!list.length)msgs.append(el("div",{className:"hint",textContent:"Ничего не найдено среди последних 200 сообщений"}));
+    list.forEach(d=>{const m=d.data(),me=m.u===uid,p=mem[m.u]||{n:m.n,a:"",b:""};
       const b=el("div",{className:"m"+(me?" me":"")+(m.k==="s"||m.k==="g"?" st":"")});
       if(!me&&m.k!=="s")b.append(el("div",{className:"n",textContent:String(p.n||"")}));
+      if(m.rp)b.append(el("div",{className:"q",onclick:e=>{e.stopPropagation();const t=document.getElementById("m-"+m.rp.i);if(t){t.scrollIntoView({block:"center"});t.classList.add("fl");setTimeout(()=>t.classList.remove("fl"),1200)}}},[el("b",{textContent:String(m.rp.n||"")}),el("div",{textContent:String(m.rp.x||"")})]));
       if(m.k==="i"&&String(m.x).startsWith("data:image/"))b.append(el("img",{src:m.x}));
-      else if(m.k==="g"){const s=stickers[m.x];b.append(s?el("img",{src:s.x}):document.createTextNode("[стикер удалён]"))}
-      else b.append(document.createTextNode(String(m.x)));
-      b.append(el("div",{className:"t",textContent:new Date(m.ts).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}));
-      const row=el("div",{className:"mr"+(me?" me":"")});
-      if(!me){const a=av(p.a,p.n,32);a.style.cursor="pointer";a.onclick=()=>viewProfile(p);row.append(a)}
-      row.append(b);msgs.append(row)});
-    if(bottom||docs.length<=30)msgs.scrollTop=msgs.scrollHeight}
-  renderStickers();
-  unsubs.push(onSnapshot(query(mcol,orderBy("ts"),limit(200)),s=>{docs=s.docs;render();markRead()},e=>alert("Нет доступа к чату: "+e.code)));
-  unsubs.push(onSnapshot(query(scol,orderBy("ts"),limit(60)),s=>{stickers={};s.docs.forEach(d=>stickers[d.id]=d.data());renderStickers();render()},()=>{}));
-  unsubs.push(onSnapshot(bcol,s=>{mem={};s.docs.forEach(d=>mem[d.id]={id:d.id,...d.data()});render()},()=>{}));
-}
-
-try{
-  const a=initializeApp(firebaseConfig);db=getFirestore(a);
-  const cred=await signInAnonymously(getAuth(a));uid=cred.user.uid;
-  chats.forEach(ch=>{watch(ch.c);syncProfile(ch.c)});
-  home();
-  const h=norm(decodeURIComponent(location.hash.slice(1)));
-  if(h.length>=6){history.replaceState(null,"",location.href.split("#")[0]);addChat(h)}
-  else if(!profile.n)editProfile();
-}catch(e){app.innerHTML='';app.append(el("div",{className:"login"},[el("p",{textContent:"Не удалось подключиться к Firebase."}),el("p",{textContent:"Код ошибки: "+(e.code||"нет")+" | "+(e.message||String(e))})]))}
-</script>
-</body>
-</html>
+      else if(m.k==="g"){const s=stickers[m.x];b.append(s?el("img",{src:s.x}):docu
