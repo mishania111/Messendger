@@ -217,4 +217,47 @@ function openChat(room){
       if(!me&&m.k!=="s")b.append(el("div",{className:"n",textContent:String(p.n||"")}));
       if(m.rp)b.append(el("div",{className:"q",onclick:e=>{e.stopPropagation();const t=document.getElementById("m-"+m.rp.i);if(t){t.scrollIntoView({block:"center"});t.classList.add("fl");setTimeout(()=>t.classList.remove("fl"),1200)}}},[el("b",{textContent:String(m.rp.n||"")}),el("div",{textContent:String(m.rp.x||"")})]));
       if(m.k==="i"&&String(m.x).startsWith("data:image/"))b.append(el("img",{src:m.x}));
-      else if(m.k==="g"){const s=stickers[m.x];b.append(s?el("img",{src:s.x}):docu
+      else if(m.k==="g"){const s=stickers[m.x];b.append(s?el("img",{src:s.x}):document.createTextNode("[стикер удалён]"))}
+      else b.append(document.createTextNode(String(m.x)));
+      b.append(el("div",{className:"t",textContent:new Date(m.ts).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})+(m.e?" · изменено":"")}));
+      const rx=m.rx||{},ks=Object.keys(rx).filter(k=>Array.isArray(rx[k])&&rx[k].length);
+      if(ks.length){const rr=el("div",{className:"rx"});ks.forEach(k=>rr.append(el("button",{type:"button",className:rx[k].includes(uid)?"me":"",textContent:k+" "+rx[k].length,onclick:e=>{e.stopPropagation();react(d.id,k,rx[k].includes(uid))}})));b.append(rr)}
+      b.onclick=()=>actions(d);
+      const row=el("div",{className:"mr"+(me?" me":""),id:"m-"+d.id});
+      if(!me){const a=av(p.a,p.n,32);a.style.cursor="pointer";a.onclick=e=>{e.stopPropagation();viewProfile(p)};row.append(a)}
+      row.append(b);msgs.append(row)});
+    if(!q&&(bottom||docs.length<=30))msgs.scrollTop=msgs.scrollHeight;else msgs.scrollTop=st}
+  const mref=id=>doc(db,"chats",room,"messages",id);
+  function react(id,e,has){updateDoc(mref(id),new FieldPath("rx",e),has?arrayRemove(uid):arrayUnion(uid)).catch(()=>alert("Не удалось поставить реакцию"))}
+  function setReply(r){replyTo=r;rbar.innerHTML="";rbar.style.display=r?"flex":"none";
+    if(r){rbar.append(el("div",{className:"rt"},[el("b",{textContent:r.n}),el("div",{textContent:r.x})]),el("button",{className:"ico",type:"button",textContent:"✕",onclick:()=>setReply(null)}));txt.focus()}}
+  function actions(d){const m=d.data(),me=m.u===uid;modal((box,close)=>{
+    const rr=el("div",{className:"c",style:"flex-direction:row;justify-content:center;gap:2px"});
+    ["👍","❤️","😂","😮","😢","🔥"].forEach(e=>rr.append(el("button",{type:"button",style:"font-size:30px;padding:4px",textContent:e,onclick:()=>{close();react(d.id,e,((m.rx||{})[e]||[]).includes(uid))}})));
+    box.append(rr,btn("Ответить",()=>{close();setReply({i:d.id,n:String((mem[m.u]||{}).n||m.n||""),x:snip(m)})},"g"));
+    if(m.k==="t")box.append(btn("Копировать",()=>{try{navigator.clipboard.writeText(m.x)}catch(e){}close()},"g"));
+    if(me&&m.k==="t")box.append(btn("Изменить",()=>{close();const v=prompt("Изменить сообщение",m.x);if(v&&v.trim()&&v.trim()!==m.x)updateDoc(mref(d.id),{x:v.trim(),e:Date.now()}).catch(()=>alert("Не удалось изменить"))},"g"));
+    if(me)box.append(btn("Удалить",()=>{close();if(confirm("Удалить сообщение у всех?"))deleteDoc(mref(d.id)).catch(()=>alert("Не удалось удалить"))},"r"));
+    box.append(btn("Закрыть",close,"g"))})}
+  function typing(){const n=Date.now();if(n-lastTy<2500)return;lastTy=n;updateDoc(doc(db,"chats",room,"members",uid),{ty:n}).catch(()=>{})}
+  function showTyping(){const names=Object.entries(ty).filter(([id,t])=>Date.now()-t.at<4000&&mem[id]).map(([id])=>mem[id].n);
+    typEl.textContent=names.length?names.join(", ")+(names.length>1?" печатают…":" печатает…"):""}
+  const iv=setInterval(showTyping,1000);unsubs.push(()=>clearInterval(iv));
+  renderStickers();
+  unsubs.push(onSnapshot(query(mcol,orderBy("ts"),limit(200)),s=>{docs=s.docs;render();markRead()},e=>alert("Нет доступа к чату: "+e.code)));
+  unsubs.push(onSnapshot(query(scol,orderBy("ts"),limit(60)),s=>{stickers={};s.docs.forEach(d=>stickers[d.id]=d.data());renderStickers();render()},()=>{}));
+  unsubs.push(onSnapshot(bcol,s=>{mem={};s.docs.forEach(d=>{const v={id:d.id,...d.data()};mem[d.id]=v;const t=ty[d.id];if(d.id!==uid&&v.ty&&(!t||t.v!==v.ty))ty[d.id]={v:v.ty,at:firstM?0:Date.now()}});firstM=false;render();showTyping()},()=>{}));
+}
+
+try{
+  const a=initializeApp(firebaseConfig);db=getFirestore(a);
+  const cred=await signInAnonymously(getAuth(a));uid=cred.user.uid;
+  chats.forEach(ch=>{watch(ch.c);syncProfile(ch.c)});
+  home();
+  const h=norm(decodeURIComponent(location.hash.slice(1)));
+  if(h.length>=6){history.replaceState(null,"",location.href.split("#")[0]);addChat(h)}
+  else if(!profile.n)editProfile();
+}catch(e){app.innerHTML='';app.append(el("div",{className:"login"},[el("p",{textContent:"Не удалось подключиться к Firebase."}),el("p",{textContent:"Код ошибки: "+(e.code||"нет")+" | "+(e.message||String(e))})]))}
+</script>
+</body>
+</html>
