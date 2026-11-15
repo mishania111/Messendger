@@ -149,7 +149,7 @@ const J=(k,d)=>{try{return JSON.parse(LS.get(k))||d}catch(e){return d}};
 const el=(t,p,c)=>{const e=document.createElement(t);Object.assign(e,p||{});(c||[]).forEach(x=>e.append(x));return e};
 let db,uid,chats=J("chats",[]),profile=J("profile",{n:LS.get("name")||"",a:"",b:""});
 const pa={},gm={};let mine={},stickHook=null;
-let wallet={h:0,used:[]},myGifts=[],walletHook=null,chatApi=null;
+let wallet={h:0,used:[]},myGifts=[],walletHook=null,chatApi=null,walletMsg="",walletErr="";
 const opt=k=>localStorage.getItem(k)==="1";const setOpt=(k,v)=>{try{localStorage.setItem(k,v?"1":"0")}catch(e){}};
 function applyTheme(){const t=LS.get("th")||"auto";if(t==="auto")delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=t}
 const last={},watchers={};let cur=null,view="home",unsubs=[],listEl=null,chipsEl=null;
@@ -224,9 +224,14 @@ function viewProfile(p,ch){modal((box,close)=>{
 
 async function redeem(raw){const code=raw.trim().toUpperCase();if(!code)return"Введи промокод";
   if(!Object.prototype.hasOwnProperty.call(PROMO_MAP,code))return"Такого промокода нет";
-  if((wallet.used||[]).includes(code))return"Этот промокод уже активирован";
-  const n=PROMO_MAP[code];
-  await setDoc(doc(db,"users",uid,"wallet","main"),{h:(wallet.h||0)+n,used:[...(wallet.used||[]),code]});
+  const ref=doc(db,"users",uid,"wallet","main");
+  const cs=await getDoc(ref),cw=cs.exists()?cs.data():{h:0,used:[]};
+  if((cw.used||[]).includes(code))return"Этот промокод уже активирован";
+  const n=PROMO_MAP[code],data={h:(cw.h||0)+n,used:[...(cw.used||[]),code]};
+  await setDoc(ref,data);
+  const chk=await getDoc(ref);
+  if(!chk.exists()||chk.data().h!==data.h)throw Object.assign(new Error("баланс не сохранился"),{code:"verify-failed"});
+  wallet=chk.data();
   return"Готово! +"+n+" ❤️"}
 
 function giftPicker(to){if(!cur){alert("Открой чат, чтобы отправить подарок");return}
@@ -260,7 +265,7 @@ function showMyGifts(){modal((box,close)=>{box.append(el("h3",{textContent:"Мо
     box.append(el("div",{className:"wr"},[el("span",{textContent:g.e,style:"font-size:30px"}),el("div",{style:"flex:1"},[el("div",{textContent:g.n}),el("small",{textContent:"от "+(x.fn||"друга")+" · "+new Date(x.ts).toLocaleDateString(),style:"color:var(--sub)"})])]))});
   box.append(btn("Закрыть",close,"g"))})}
 
-function settings(){view="settings";cur=null;listEl=null;chipsEl=null;unsubs.forEach(u=>u());unsubs=[];app.innerHTML="";
+function settings(){walletMsg="";view="settings";cur=null;listEl=null;chipsEl=null;unsubs.forEach(u=>u());unsubs=[];app.innerHTML="";
   const body=el("div",{id:"list"});
   app.append(el("header",{},[el("button",{className:"ico",textContent:"←",onclick:home}),el("b",{textContent:"Профиль и настройки"})]),body);
   const draw=()=>{body.innerHTML="";
@@ -270,9 +275,9 @@ function settings(){view="settings";cur=null;listEl=null;chipsEl=null;unsubs.for
     const tog=(t,sub,k)=>row(t,sub,pill(opt(k)?"Вкл":"Выкл"),()=>{setOpt(k,!opt(k));draw()});
     const ava=av(profile.a,profile.n,84);ava.style.cursor="pointer";ava.onclick=()=>showPhoto(profile.a,()=>fullAva(uid));
     body.append(el("div",{className:"card"},[ava,el("h3",{textContent:profile.n||"Без имени",style:"margin:0"}),el("div",{textContent:profile.b||"О себе: пока пусто",style:"color:var(--sub)"}),btn("Изменить профиль",editProfile,"g")]));
-    const msg=el("div",{style:"color:var(--sub);min-height:18px"}),inp=el("input",{placeholder:"Промокод",maxLength:30});
+    const msg=el("div",{style:"color:var(--sub);min-height:18px",textContent:walletErr?"Баланс не читается ("+walletErr+"). Проверь, что правила Firestore опубликованы.":walletMsg}),inp=el("input",{placeholder:"Промокод",maxLength:30});
     body.append(el("div",{className:"card"},[el("div",{textContent:"Мои сердечки"}),el("div",{className:"big",textContent:"❤️ "+(wallet.h||0)}),
-      el("div",{className:"pr"},[inp,btn("Активировать",async()=>{msg.textContent="…";try{msg.textContent=await redeem(inp.value);inp.value=""}catch(e){msg.textContent="Не удалось активировать ("+(e.code||"ошибка")+")"}})]),msg,
+      el("div",{className:"pr"},[inp,btn("Активировать",async()=>{walletMsg="…";draw();try{walletMsg=await redeem(inp.value)}catch(e){walletMsg="Не удалось активировать ("+(e.code||e.message||"ошибка")+")"}draw()})]),msg,
       el("div",{textContent:"Сердечки даются только по промокодам. Дарить подарки можно из профиля человека или кнопкой 🎁 в личке.",style:"color:var(--sub);font-size:13px"})]));
     sec("Подарки");row("Мои подарки",myGifts.slice(0,8).map(x=>(giftBy(x.g)||{e:"🎁"}).e).join("")||"Пока нет",pill(String(myGifts.length)),showMyGifts);
     sec("Внешний вид");const th=LS.get("th")||"auto";
@@ -473,7 +478,7 @@ try{
     if(d.c&&/^[a-z0-9_-]{6,60}$/i.test(d.c)&&!chats.some(x=>x.c===d.c)){chats.push({c:d.c,t:d.n||"Личка",r:0,dm:d.f});save();watch(d.c);syncProfile(d.c)}
     deleteDoc(c.doc.ref).catch(()=>{});paint()})},()=>{});
   applyTheme();
-  onSnapshot(doc(db,"users",uid,"wallet","main"),sn=>{wallet=sn.exists()?sn.data():{h:0,used:[]};if(walletHook)walletHook()},()=>{});
+  onSnapshot(doc(db,"users",uid,"wallet","main"),sn=>{wallet=sn.exists()?sn.data():{h:0,used:[]};walletErr="";if(walletHook)walletHook()},e=>{walletErr=e.code||"ошибка";if(walletHook)walletHook()});
   onSnapshot(query(collection(db,"users",uid,"gifts"),orderBy("ts","desc"),limit(100)),sn=>{myGifts=sn.docs.map(d=>d.data());if(walletHook)walletHook()},()=>{});
   home();
   const h=norm(decodeURIComponent(location.hash.slice(1)));
