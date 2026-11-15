@@ -81,7 +81,7 @@ form{background:var(--bar);display:flex;align-items:center;gap:4px;padding:6px 8
 <script type="module">
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {getAuth,signInAnonymously} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import {getFirestore,collection,addDoc,doc,setDoc,updateDoc,deleteDoc,arrayUnion,arrayRemove,FieldPath,query,orderBy,limit,onSnapshot} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import {getFirestore,collection,addDoc,doc,setDoc,updateDoc,deleteDoc,arrayUnion,arrayRemove,FieldPath,serverTimestamp,query,orderBy,limit,onSnapshot} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBoWv-mPq93B7o3HSOwLB0uAh6sleDxpG8",
@@ -108,6 +108,7 @@ const norm=v=>v.trim().toLowerCase().replace(/[^a-zа-я0-9_-]/gi,"");
 const rnd=()=>[...crypto.getRandomValues(new Uint8Array(8))].map(b=>b.toString(16).padStart(2,"0")).join("");
 const inviteLink=c=>location.href.split("#")[0]+"#"+c;
 
+const T=x=>x&&x.ts&&x.ts.toMillis?{...x,ts:x.ts.toMillis()}:x;
 function av(a,n,s){const d=el("div",{className:"av"});if(s)d.style.cssText="width:"+s+"px;height:"+s+"px;font-size:"+Math.round(s/2.3)+"px";
   if(a)d.append(el("img",{src:a}));else d.textContent=(n||"?").trim().charAt(0).toUpperCase();return d}
 const ttl=ch=>ch.dm&&pa[ch.c]?pa[ch.c].n:ch.t;
@@ -127,9 +128,9 @@ async function toSticker(f){const im=await loadImg(f);
 
 function syncProfile(c){if(!profile.n)return;setDoc(doc(db,"chats",c,"members",uid),{n:profile.n,a:profile.a||"",b:profile.b||"",t:myTopic,ts:Date.now()},{merge:true}).catch(()=>{})}
 function isUnread(c){const l=last[c],ch=chats.find(x=>x.c===c);return !!(l&&l.u!==uid&&l.ts>(ch?ch.r||0:0))}
-function markRead(){const ch=chats.find(x=>x.c===cur);if(!ch)return;ch.r=Math.max(Date.now(),last[cur]?last[cur].ts:0);save();renderChips()}
+function markRead(){const ch=chats.find(x=>x.c===cur);if(!ch)return;ch.r=Math.max(ch.r||0,last[cur]?last[cur].ts:0);save();renderChips()}
 function watch(c){if(watchers[c])return;const ch=chats.find(x=>x.c===c),us=[];
-  us.push(onSnapshot(query(collection(db,"chats",c,"messages"),orderBy("ts","desc"),limit(1)),s=>{last[c]=s.docs[0]?s.docs[0].data():null;if(cur===c)markRead();paint()},()=>{}));
+  us.push(onSnapshot(query(collection(db,"chats",c,"messages"),orderBy("ts","desc"),limit(1)),s=>{last[c]=s.docs[0]?T(s.docs[0].data({serverTimestamps:"estimate"})):null;if(cur===c)markRead();paint()},()=>{}));
   if(ch&&ch.dm)us.push(onSnapshot(collection(db,"chats",c,"members"),s=>{s.docs.forEach(d=>{if(d.id===ch.dm)pa[c]={id:d.id,...d.data()}});paint()},()=>{}));
   else us.push(onSnapshot(doc(db,"chats",c,"meta","info"),s=>{gm[c]=s.exists()?s.data():{};paint()},()=>{}));
   watchers[c]=()=>us.forEach(u=>u())}
@@ -223,7 +224,7 @@ function openChat(room){
     box.append(cf,btn("Сменить аватарку чата",()=>cf.click(),"g"),btn("Скопировать приглашение",()=>{try{navigator.clipboard.writeText(inviteLink(room))}catch(e){}alert("Ссылка скопирована. Отправляй только своим.")},"g"),btn("Закрыть",close,"g"))})}
   function notify(o){const body=o.k==="i"?"📷 Фото":o.k==="t"?(NTFY_PREVIEW?o.x:"Новое сообщение"):"Стикер";
     Object.values(mem).filter(m=>m.id!==uid&&m.t).forEach(m=>fetch(NTFY_URL,{method:"POST",body:JSON.stringify({topic:m.t,title:profile.n,message:body,click:inviteLink(room)})}).catch(()=>{}))}
-  function send(o){addDoc(mcol,{...o,...(replyTo?{rp:replyTo}:{}),u:uid,n:profile.n,ts:Date.now()}).then(()=>notify(o)).catch(()=>alert("Не удалось отправить"));stick=true;setReply(null)}
+  function send(o){addDoc(mcol,{...o,...(replyTo?{rp:replyTo}:{}),u:uid,n:profile.n,ts:serverTimestamp()}).then(()=>notify(o)).catch(()=>alert("Не удалось отправить"));stick=true;setReply(null)}
   file.onchange=async()=>{const f=file.files[0];file.value="";if(!f)return;try{send({k:"i",x:await shrink(f)})}catch(e){alert("Не удалось обработать фото")}};
   sfile.onchange=async()=>{const f=sfile.files[0];sfile.value="";if(!f)return;try{await addDoc(collection(db,"users",uid,"stickers"),{x:await toSticker(f),ts:Date.now()})}catch(e){alert("Не удалось добавить стикер")}};
 
@@ -301,8 +302,8 @@ function openChat(room){
   function setReply(r){replyTo=r;rbar.innerHTML="";rbar.style.display=r?"flex":"none";
     if(r){rbar.append(el("div",{className:"rt"},[el("b",{textContent:r.n}),el("div",{textContent:r.x})]),el("button",{className:"ico",type:"button",textContent:"✕",onclick:()=>setReply(null)}));txt.focus()}}
   function actions(d){const m=d.data(),me=m.u===uid;modal((box,close)=>{
-    const rr=el("div",{className:"c",style:"flex-direction:row;justify-content:center;gap:2px"});
-    ["👍","❤️","😂","😮","😢","🔥"].forEach(e=>rr.append(el("button",{type:"button",style:"font-size:30px;padding:4px",textContent:e,onclick:()=>{close();react(d.id,e,((m.rx||{})[e]||[]).includes(uid))}})));
+    const rr=el("div",{className:"c",style:"flex-direction:row;flex-wrap:wrap;justify-content:center;gap:2px"});
+    ["👍","❤️","😂","😮","😢","🔥","😘","💀","🤓","😎","🥹","🧐","😤","🤯","😡","😱","🤭","🫪","👎"].forEach(e=>rr.append(el("button",{type:"button",style:"font-size:28px;padding:3px",textContent:e,onclick:()=>{close();react(d.id,e,((m.rx||{})[e]||[]).includes(uid))}})));
     box.append(rr);{const w=whoBlock(m);if(w)box.append(w)}box.append(btn("Ответить",()=>{close();setReply({i:d.id,n:String((mem[m.u]||{}).n||m.n||""),x:snip(m)})},"g"));
     if(m.k==="t")box.append(btn("Копировать",()=>{try{navigator.clipboard.writeText(m.x)}catch(e){}close()},"g"));
     if(me&&m.k==="t")box.append(btn("Изменить",()=>{close();const v=prompt("Изменить сообщение",m.x);if(v&&v.trim()&&v.trim()!==m.x)updateDoc(mref(d.id),{x:v.trim(),e:Date.now()}).catch(()=>alert("Не удалось изменить"))},"g"));
@@ -314,7 +315,7 @@ function openChat(room){
   const iv=setInterval(showTyping,1000);unsubs.push(()=>clearInterval(iv));
   const vh=()=>markSeen();document.addEventListener("visibilitychange",vh);unsubs.push(()=>document.removeEventListener("visibilitychange",vh));
   renderStickers();
-  unsubs.push(onSnapshot(query(mcol,orderBy("ts"),limit(200)),s=>{docs=s.docs;render();markRead()},e=>alert("Нет доступа к чату: "+e.code)));
+  unsubs.push(onSnapshot(query(mcol,orderBy("ts"),limit(200)),s=>{docs=s.docs.map(d=>({id:d.id,data:()=>T(d.data({serverTimestamps:"estimate"}))}));render();markRead()},e=>alert("Нет доступа к чату: "+e.code)));
   unsubs.push(onSnapshot(query(scol,orderBy("ts"),limit(60)),s=>{stickers={};s.docs.forEach(d=>stickers[d.id]=d.data());renderStickers();render()},()=>{}));
   unsubs.push(onSnapshot(bcol,s=>{mem={};s.docs.forEach(d=>{const v={id:d.id,...d.data()};mem[d.id]=v;const t=ty[d.id];if(d.id!==uid&&v.ty&&(!t||t.v!==v.ty))ty[d.id]={v:v.ty,at:firstM?0:Date.now()}});firstM=false;render();showTyping()},()=>{}));
 }
