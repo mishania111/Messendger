@@ -151,8 +151,10 @@ function viewProfile(p){modal((box,close)=>{
 async function startDm(p){
   if(!profile.n){editProfile();return}
   let ch=chats.find(x=>x.dm===p.id);
-  if(!ch){const c="dm"+rnd();ch={c,t:p.n||"Личка",r:0,dm:p.id};chats.push(ch);save();watch(c);syncProfile(c);
-    await setDoc(doc(collection(db,"users",p.id,"inbox")),{c,from:uid,n:profile.n,ts:Date.now()}).catch(()=>alert("Не удалось отправить приглашение в личку"))}
+  if(!ch){const c="dm"+rnd();
+    try{await setDoc(doc(collection(db,"users",p.id,"inbox")),{c,f:uid,n:profile.n,ts:Date.now()})}
+    catch(e){alert("Не удалось отправить приглашение в личку ("+(e.code||e.message)+"). Проверь, что правила Firestore обновлены и опубликованы.");return}
+    ch={c,t:p.n||"Личка",r:0,dm:p.id};chats.push(ch);save();watch(c);syncProfile(c)}
   openChat(ch.c)}
 function addChat(code){
   if(!profile.n){editProfile();return}
@@ -323,7 +325,7 @@ try{
   chats.forEach(ch=>{watch(ch.c);syncProfile(ch.c)});
   onSnapshot(query(collection(db,"users",uid,"stickers"),orderBy("ts"),limit(100)),sn=>{mine={};sn.docs.forEach(d=>mine[d.id]=d.data());if(stickHook)stickHook()},()=>{});
   onSnapshot(collection(db,"users",uid,"inbox"),sn=>{sn.docChanges().forEach(c=>{if(c.type!=="added")return;const d=c.doc.data();
-    if(d.c&&/^[a-z0-9_-]{6,60}$/i.test(d.c)&&!chats.some(x=>x.c===d.c)){chats.push({c:d.c,t:d.n||"Личка",r:0,dm:d.from});save();watch(d.c);syncProfile(d.c)}
+    if(d.c&&/^[a-z0-9_-]{6,60}$/i.test(d.c)&&!chats.some(x=>x.c===d.c)){chats.push({c:d.c,t:d.n||"Личка",r:0,dm:d.f});save();watch(d.c);syncProfile(d.c)}
     deleteDoc(c.doc.ref).catch(()=>{});paint()})},()=>{});
   home();
   const h=norm(decodeURIComponent(location.hash.slice(1)));
