@@ -93,6 +93,7 @@ form{background:var(--bar);display:flex;align-items:center;gap:4px;padding:6px 8
 @keyframes fdn{0%{transform:translateY(0) rotate(0);opacity:1}100%{transform:translateY(112vh) translateX(var(--sx)) rotate(var(--r));opacity:.9}}
 @keyframes fbs{0%{transform:translate(0,0) scale(.3);opacity:1}100%{transform:translate(var(--dx),var(--dy)) scale(1.4);opacity:0}}
 @keyframes pop{0%{transform:translate(-50%,-50%) scale(0);opacity:1}30%{transform:translate(-50%,-50%) scale(1.3)}60%{transform:translate(-50%,-50%) scale(1);opacity:1}100%{transform:translate(-50%,-50%) scale(1.1);opacity:0}}
+.m.gf .gn{font-style:italic;margin:4px 0}
 </style>
 </head>
 <body>
@@ -122,10 +123,10 @@ const NTFY_PREVIEW=false; // true: текст сообщения виден в �
 const PROMOS={
   "WELCOME":50,
   "LOVE":100,
-  "KSENYA":1401,
   "LUBLU":67,
+  "KSENYA":1401,
   "KITTY":2807,
-  "KISS":5,
+  "KISS":0,
   "GOD":90000
   // "МОЙКОД":25,   <- пример: добавь новую строку по этому образцу
 };
@@ -166,6 +167,7 @@ const rnd=()=>[...crypto.getRandomValues(new Uint8Array(8))].map(b=>b.toString(1
 const inviteLink=c=>location.href.split("#")[0]+"#"+c;
 
 const T=x=>x&&x.ts&&x.ts.toMillis?{...x,ts:x.ts.toMillis()}:x;
+const errText=(e,what)=>(what||"Не удалось отправить")+" ("+(e.code||e.message)+")"+(e.code==="resource-exhausted"?"\nДостигнут дневной лимит бесплатного тарифа Firebase, он сбросится в течение суток.":e.code==="permission-denied"?"\nПроверь, что последние правила Firestore опубликованы.":"");
 function av(a,n,s){const d=el("div",{className:"av"});if(s)d.style.cssText="width:"+s+"px;height:"+s+"px;font-size:"+Math.round(s/2.3)+"px";
   if(a)d.append(el("img",{src:a}));else d.textContent=(n||"?").trim().charAt(0).toUpperCase();return d}
 const ttl=ch=>ch.dm?(ch.nick||(pa[ch.c]?pa[ch.c].n:ch.t)):ch.t;
@@ -216,11 +218,14 @@ function renameNick(ch){const v=prompt("Как назвать контакт у 
 function viewProfile(p,ch){modal((box,close)=>{
   const real=p.n||"Без имени",shown=ch&&ch.nick?ch.nick:real;
   const ava=av(p.a,p.n,110);ava.style.cursor="pointer";ava.onclick=()=>viewAva(p);
-  const gl=el("div",{style:"font-size:22px;letter-spacing:2px"});
+  const gl=el("div",{className:"who",style:"width:100%;text-align:left"});
   box.append(el("div",{className:"c"},[ava,el("h3",{textContent:shown}),
     ...(shown!==real?[el("div",{textContent:"Настоящее имя: "+real,style:"color:var(--sub);font-size:13px"})]:[]),
     el("div",{textContent:p.b||"Пока ничего о себе не рассказал(а)",style:"color:var(--sub)"}),gl]));
-  if(p.id)getDocs(query(collection(db,"users",p.id,"gifts"),orderBy("ts","desc"),limit(30))).then(sn=>{if(sn.size)gl.textContent="Подарки: "+sn.docs.map(d=>(giftBy(d.data().g)||{e:"🎁"}).e).join("")}).catch(()=>{});
+  if(p.id)getDocs(query(collection(db,"users",p.id,"gifts"),orderBy("ts","desc"),limit(30))).then(sn=>{const items=sn.docs.map(d=>d.data()).filter(x=>!x.h);if(!items.length)return;
+    gl.append(el("div",{className:"sh",textContent:"Подарки"}));
+    items.forEach(x=>{const g=giftBy(x.g)||{e:"🎁",n:"Подарок"};
+      gl.append(el("div",{className:"wr"},[el("span",{textContent:g.e,style:"font-size:28px"}),el("div",{style:"flex:1;min-width:0"},[el("div",{textContent:g.n+" · "+(x.an?"от анонима":"от "+(x.fn||"друга"))}),...(x.m?[el("small",{textContent:"«"+x.m+"»",style:"color:var(--sub)"})]:[])])]))})}).catch(()=>{});
   if(p.id&&p.id!==uid){
     if(cur)box.append(btn("🎁 Подарить",()=>{close();giftPicker(p)}));
     if(!(ch&&ch.dm))box.append(btn("Написать лично",()=>{close();startDm(p)}));
@@ -243,17 +248,35 @@ function giftPicker(to){if(!cur){alert("Открой чат, чтобы отпр
   modal((box,close)=>{
     box.append(el("h3",{textContent:"Подарок для "+(to.n||"друга")}),el("div",{textContent:"У тебя: ❤️ "+(wallet.h||0),style:"color:var(--sub)"}));
     const grid=el("div",{className:"gg"});
-    GIFTS.forEach(g=>grid.append(el("button",{type:"button",className:"gi"+((wallet.h||0)<g.p?" off":""),onclick:()=>{close();sendGift(to,g)}},
+    GIFTS.forEach(g=>grid.append(el("button",{type:"button",className:"gi"+((wallet.h||0)<g.p?" off":""),onclick:()=>{close();giftCompose(to,g)}},
       [el("div",{textContent:g.e,style:"font-size:38px"}),el("div",{textContent:g.n,style:"font-size:13px"}),el("div",{textContent:"❤️ "+g.p,style:"font-size:13px;color:var(--ac)"})])));
     box.append(grid,btn("Закрыть",close,"g"))})}
-async function sendGift(to,g){const room=cur;if(!room||!to||!to.id)return;const bal=wallet.h||0;
-  if(bal<g.p){alert("Не хватает сердечек: нужно "+g.p+", у тебя "+bal+". Промокоды вводятся в меню профиля (аватарка вверху списка чатов).");return}
-  try{const bt=writeBatch(db);
-    bt.set(doc(db,"users",uid,"wallet","main"),{h:bal-g.p,used:wallet.used||[]});
-    bt.set(doc(collection(db,"chats",room,"messages")),{k:"f",x:g.id,to:to.id,tn:to.n||"",u:uid,n:profile.n,ts:serverTimestamp()});
-    bt.set(doc(collection(db,"users",to.id,"gifts")),{g:g.id,f:uid,fn:profile.n,ts:Date.now()});
-    await bt.commit();playFx(g);if(chatApi)chatApi.notify({k:"f"})}
-  catch(e){alert("Не удалось отправить подарок ("+(e.code||e.message)+")")}}
+function giftCompose(to,g){modal((box,close)=>{
+  const t=el("textarea",{placeholder:"Сообщение к подарку (необязательно)",maxLength:200,rows:3,style:"padding:10px;border-radius:12px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font:inherit;resize:none"});
+  let an=false;const cb=el("button",{type:"button",className:"btn g",textContent:"🕶 Анонимно: выкл",onclick:()=>{an=!an;cb.textContent="🕶 Анонимно: "+(an?"вкл":"выкл")}});
+  box.append(el("div",{className:"c"},[el("div",{textContent:g.e,style:"font-size:72px"}),el("h3",{textContent:g.n+" для "+(to.n||"друга")}),el("div",{textContent:"❤️ "+g.p,style:"color:var(--ac)"})]),t,cb,
+    btn("Отправить",()=>{close();sendGift(to,g,{note:t.value.trim(),an})}),btn("Назад",()=>{close();giftPicker(to)},"g"))})}
+async function sendGift(to,g,o){o=o||{};const room=cur;if(!room||!to||!to.id)return;
+  try{const ref=doc(db,"users",uid,"wallet","main"),cs=await getDoc(ref),cw=cs.exists()?cs.data():{h:0,used:[]},bal=cw.h||0;
+    if(bal<g.p){alert("Не хватает сердечек: нужно "+g.p+", у тебя "+bal+". Промокоды вводятся в меню профиля (аватарка вверху списка чатов).");return}
+    const bt=writeBatch(db);
+    bt.set(ref,{h:bal-g.p,used:cw.used||[]});
+    bt.set(doc(collection(db,"chats",room,"messages")),{k:"f",x:g.id,to:to.id,tn:to.n||"",u:uid,n:profile.n,ts:serverTimestamp(),...(o.note?{gm:o.note}:{}),...(o.an?{an:true}:{})});
+    bt.set(doc(collection(db,"users",to.id,"gifts")),{g:g.id,f:uid,fn:profile.n,ts:Date.now(),p:g.p,...(o.note?{m:o.note}:{}),...(o.an?{an:true}:{})});
+    await bt.commit();playFx(g);if(chatApi)chatApi.notify({k:"f",an:!!o.an})}
+  catch(e){alert(errText(e,"Не удалось отправить подарок"))}}
+async function sellGift(x,back){try{const ref=doc(db,"users",uid,"wallet","main"),cs=await getDoc(ref),cw=cs.exists()?cs.data():{h:0,used:[]};
+  const bt=writeBatch(db);bt.set(ref,{h:(cw.h||0)+back,used:cw.used||[]});bt.delete(doc(db,"users",uid,"gifts",x.id));await bt.commit();alert("Продано: +"+back+" ❤️")}
+  catch(e){alert(errText(e,"Не удалось продать"))}}
+function giftMenu(x){modal((box,close)=>{
+  const g=giftBy(x.g)||{e:"🎁",n:"Подарок",p:0},price=x.p!=null?x.p:g.p,back=Math.floor(price*.8);
+  box.append(el("div",{className:"c"},[el("div",{textContent:g.e,style:"font-size:72px"}),el("h3",{textContent:g.n}),
+    el("div",{textContent:"от "+(x.fn||"друга")+(x.an?" (анонимно)":""),style:"color:var(--sub)"}),...(x.m?[el("div",{textContent:"«"+x.m+"»"})]:[]),
+    ...(x.h?[el("div",{textContent:"Скрыт из профиля",style:"color:var(--sub);font-size:13px"})]:[])]),
+    btn(x.h?"Показывать в профиле":"Скрыть из профиля",()=>{updateDoc(doc(db,"users",uid,"gifts",x.id),{h:!x.h}).catch(e=>alert(errText(e,"Не удалось изменить")));close()},"g"),
+    btn("Продать за ❤️ "+back+" (80%)",()=>{if(confirm("Продать «"+g.n+"» за "+back+" ❤️? Подарок исчезнет."))sellGift(x,back);close()}),
+    btn("Удалить",()=>{if(confirm("Удалить подарок без возврата сердечек?")){deleteDoc(doc(db,"users",uid,"gifts",x.id)).catch(()=>{});close()}},"r"),
+    btn("Закрыть",close,"g"))})}
 function playFx(g){const box=el("div",{id:"fx"});document.body.append(box);
   const r=(a,b)=>a+Math.random()*(b-a),COL=["#ff4d6d","#ffd166","#06d6a0","#4cc9f0","#b388ff"],fx=g.fx||"float";
   const add=(t,st,an)=>{const e=el("span",{className:"fp",textContent:t});e.style.cssText=st+";animation:"+an;box.append(e)};
@@ -267,8 +290,9 @@ function playFx(g){const box=el("div",{id:"fx"});document.body.append(box);
 function showMyGifts(){modal((box,close)=>{box.append(el("h3",{textContent:"Мои подарки"}));
   if(!myGifts.length)box.append(el("div",{className:"hint",textContent:"Подарков пока нет"}));
   myGifts.forEach(x=>{const g=giftBy(x.g)||{e:"🎁",n:"Подарок"};
-    box.append(el("div",{className:"wr"},[el("span",{textContent:g.e,style:"font-size:30px"}),el("div",{style:"flex:1"},[el("div",{textContent:g.n}),el("small",{textContent:"от "+(x.fn||"друга")+" · "+new Date(x.ts).toLocaleDateString(),style:"color:var(--sub)"})])]))});
-  box.append(btn("Закрыть",close,"g"))})}
+    box.append(el("div",{className:"wr",style:"cursor:pointer",onclick:()=>{close();giftMenu(x)}},[el("span",{textContent:g.e,style:"font-size:30px"}),
+      el("div",{style:"flex:1;min-width:0"},[el("div",{textContent:g.n+(x.h?" · 🙈":"")}),el("small",{textContent:"от "+(x.fn||"друга")+(x.an?" (анонимно)":"")+" · "+new Date(x.ts).toLocaleDateString()+(x.m?" · «"+x.m+"»":""),style:"color:var(--sub)"})])]))});
+  box.append(el("div",{textContent:"Нажми на подарок, чтобы скрыть, продать (80% цены) или удалить.",style:"color:var(--sub);font-size:13px"}),btn("Закрыть",close,"g"))})}
 
 function settings(){walletMsg="";view="settings";cur=null;listEl=null;chipsEl=null;unsubs.forEach(u=>u());unsubs=[];app.innerHTML="";
   const body=el("div",{id:"list"});
@@ -374,9 +398,9 @@ function openChat(room){
       try{const th=await avatarData(x,128,.75),fl=await avatarData(x,512,.85);await setDoc(doc(db,"chats",room,"meta","info"),{a:th,ts:Date.now()});await setDoc(doc(db,"chats",room,"meta","full"),{f:fl});close()}catch(e){alert("Не удалось сменить аватарку")}}});
     box.append(cf,btn("Сменить аватарку чата",()=>cf.click(),"g"),btn("Скопировать приглашение",()=>{try{navigator.clipboard.writeText(inviteLink(room))}catch(e){}alert("Ссылка скопирована. Отправляй только своим.")},"g"),btn("Закрыть",close,"g"))})}
   function notify(o){const body=o.k==="i"?"📷 Фото":o.k==="t"?(opt("pv")?o.x:"Новое сообщение"):o.k==="f"?"🎁 Подарок":"Стикер";
-    Object.values(mem).filter(m=>m.id!==uid&&m.t).forEach(m=>fetch(NTFY_URL,{method:"POST",body:JSON.stringify({topic:m.t,title:profile.n,message:body,click:inviteLink(room)})}).catch(()=>{}))}
+    Object.values(mem).filter(m=>m.id!==uid&&m.t).forEach(m=>fetch(NTFY_URL,{method:"POST",body:JSON.stringify({topic:m.t,title:o.an?"Аноним":profile.n,message:body,click:inviteLink(room)})}).catch(()=>{}))}
   chatApi={notify};
-  function send(o){addDoc(mcol,{...o,...(replyTo?{rp:replyTo}:{}),u:uid,n:profile.n,ts:serverTimestamp()}).then(()=>notify(o)).catch(()=>alert("Не удалось отправить"));stick=true;setReply(null)}
+  function send(o){Promise.resolve().then(()=>addDoc(mcol,{...o,...(replyTo?{rp:replyTo}:{}),u:uid,n:profile.n,ts:serverTimestamp()})).then(()=>notify(o)).catch(e=>alert(errText(e)));stick=true;setReply(null)}
   file.onchange=async()=>{const f=file.files[0];file.value="";if(!f)return;try{send({k:"i",x:await shrink(f)})}catch(e){alert("Не удалось обработать фото")}};
   sfile.onchange=async()=>{const f=sfile.files[0];sfile.value="";if(!f)return;try{await addDoc(collection(db,"users",uid,"stickers"),{x:await toSticker(f),ts:Date.now()})}catch(e){alert("Не удалось добавить стикер")}};
 
@@ -408,11 +432,14 @@ function openChat(room){
     if(q&&!list.length)msgs.append(el("div",{className:"hint",textContent:"Ничего не найдено среди последних 200 сообщений"}));
     list.forEach(d=>{const m=d.data(),me=m.u===uid,p=mem[m.u]||{n:m.n,a:"",b:""};
       const b=el("div",{className:"m"+(me?" me":"")+(m.k==="s"||m.k==="g"?" st":"")});
-      if(!me&&m.k!=="s")b.append(el("div",{className:"n",textContent:String((ch&&ch.dm&&m.u===ch.dm?ttl(ch):p.n)||"")}));
+      if(!me&&m.k!=="s"&&!(m.k==="f"&&m.an&&m.to!==uid))b.append(el("div",{className:"n",textContent:String((ch&&ch.dm&&m.u===ch.dm?ttl(ch):p.n)||"")}));
       if(m.rp)b.append(el("div",{className:"q",onclick:e=>{e.stopPropagation();const t=document.getElementById("m-"+m.rp.i);if(t){t.scrollIntoView({block:"center"});t.classList.add("fl");setTimeout(()=>t.classList.remove("fl"),1200)}}},[el("b",{textContent:String(m.rp.n||"")}),el("div",{textContent:String(m.rp.x||"")})]));
       if(m.k==="i"&&String(m.x).startsWith("data:image/"))b.append(el("img",{src:m.x}));
       else if(m.k==="g"){const s=stickers[m.x];b.append(s?el("img",{src:s.x}):document.createTextNode("[стикер удалён]"))}
-      else if(m.k==="f"){const g=giftBy(m.x)||{e:"🎁",n:"Подарок",p:0};b.className+=" gf";b.append(el("div",{className:"ge",textContent:g.e}),el("div",{textContent:(m.n||"")+" дарит "+(m.tn||"")+" «"+g.n+"»"}),el("div",{className:"gp",textContent:"❤️ "+g.p}))}
+      else if(m.k==="f"){const g=giftBy(m.x)||{e:"🎁",n:"Подарок",p:0},anon=m.an&&m.u!==uid&&m.to!==uid;b.className+=" gf";
+        b.append(el("div",{className:"ge",textContent:g.e}),el("div",{textContent:(anon?"Аноним":(m.n||""))+" дарит "+(m.tn||"")+" «"+g.n+"»"}));
+        if(m.gm)b.append(el("div",{className:"gn",textContent:"«"+m.gm+"»"}));
+        b.append(el("div",{className:"gp",textContent:"❤️ "+g.p+(m.an&&(m.u===uid||m.to===uid)?" · 🕶 анонимно":"")}))}
       else b.append(document.createTextNode(String(m.x)));
       const rd=readers(m),td=el("div",{className:"t",textContent:new Date(m.ts).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})+(m.e?" · изменено":"")+(me?" ":"")});
       if(me)td.append(el("span",{className:rd.length?"ok":"",textContent:rd.length?"✓✓":"✓"}));
@@ -428,7 +455,7 @@ function openChat(room){
           rr.append(cb)});b.append(rr)}
       b.onclick=()=>actions(d);
       const row=el("div",{className:"mr"+(me?" me":""),id:"m-"+d.id});
-      if(!me){const a=av(p.a,p.n,32);a.style.cursor="pointer";a.onclick=e=>{e.stopPropagation();viewProfile(p,ch&&ch.dm&&p.id===ch.dm?ch:null)};row.append(a)}
+      if(!me&&!(m.k==="f"&&m.an&&m.to!==uid)){const a=av(p.a,p.n,32);a.style.cursor="pointer";a.onclick=e=>{e.stopPropagation();viewProfile(p,ch&&ch.dm&&p.id===ch.dm?ch:null)};row.append(a)}
       row.append(b);msgs.append(row)});
     const added=docs.length-prevLen;prevLen=docs.length;
     if(!q&&(bottom||docs.length<=30)){msgs.scrollTop=msgs.scrollHeight;newCnt=0}else{msgs.scrollTop=st;if(added>0&&!q)newCnt+=added}
@@ -469,7 +496,11 @@ function openChat(room){
   const vh=()=>markSeen();document.addEventListener("visibilitychange",vh);unsubs.push(()=>document.removeEventListener("visibilitychange",vh));
   renderStickers();
   unsubs.push(onSnapshot(query(mcol,orderBy("ts"),limit(200)),s=>{docs=s.docs.map(d=>({id:d.id,data:()=>T(d.data({serverTimestamps:"estimate"}))}));render();markRead();
-    if(!firstMsgs)s.docChanges().forEach(c=>{if(c.type==="added"){const m=c.doc.data({serverTimestamps:"estimate"});if(m.k==="f"&&m.u!==uid){const g=giftBy(m.x);if(g)playFx(g)}}});firstMsgs=false},e=>alert("Нет доступа к чату: "+e.code)));
+    {const seen=J("fxs",[]),n0=seen.length;let play=null;
+      s.docChanges().forEach(c=>{if(c.type!=="added")return;const m=c.doc.data({serverTimestamps:"estimate"});
+        if(m.k==="f"&&m.to===uid&&!seen.includes(c.doc.id)){seen.push(c.doc.id);const g=giftBy(m.x);if(g)play=g}});
+      if(seen.length!==n0)LS.set("fxs",JSON.stringify(seen.slice(-300)));if(play)playFx(play)}
+    firstMsgs=false},e=>alert("Нет доступа к чату: "+e.code)));
   unsubs.push(onSnapshot(query(scol,orderBy("ts"),limit(60)),s=>{stickers={};s.docs.forEach(d=>stickers[d.id]=d.data());renderStickers();render()},()=>{}));
   unsubs.push(onSnapshot(bcol,s=>{mem={};s.docs.forEach(d=>{const v={id:d.id,...d.data()};mem[d.id]=v;const t=ty[d.id];if(d.id!==uid&&v.ty&&(!t||t.v!==v.ty))ty[d.id]={v:v.ty,at:firstM?0:Date.now()}});firstM=false;render();showTyping()},()=>{}));
 }
@@ -484,7 +515,7 @@ try{
     deleteDoc(c.doc.ref).catch(()=>{});paint()})},()=>{});
   applyTheme();
   onSnapshot(doc(db,"users",uid,"wallet","main"),sn=>{wallet=sn.exists()?sn.data():{h:0,used:[]};walletErr="";if(walletHook)walletHook()},e=>{walletErr=e.code||"ошибка";if(walletHook)walletHook()});
-  onSnapshot(query(collection(db,"users",uid,"gifts"),orderBy("ts","desc"),limit(100)),sn=>{myGifts=sn.docs.map(d=>d.data());if(walletHook)walletHook()},()=>{});
+  onSnapshot(query(collection(db,"users",uid,"gifts"),orderBy("ts","desc"),limit(100)),sn=>{myGifts=sn.docs.map(d=>({id:d.id,...d.data()}));if(walletHook)walletHook()},()=>{});
   home();
   const h=norm(decodeURIComponent(location.hash.slice(1)));
   if(h.length>=6){history.replaceState(null,"",location.href.split("#")[0]);addChat(h)}
