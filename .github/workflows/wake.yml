@@ -1,0 +1,23 @@
+name: Wake
+
+on:
+  workflow_dispatch:
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Разбудить сайт
+        run: |
+          mv index_real.html index.html
+
+      - name: Commit
+        run: |
+          git config user.name "SleepBot"
+          git config user.email "bot@sleep.com"
+          git add -A
+          git commit -m "Сайт проснулся" || echo "no changes"
+          git push
