@@ -124,6 +124,8 @@ html[data-ny="1"] #app{padding-top:22px}:root[data-ny="1"]{--ac:#d9363e}
 .cform{display:flex;gap:6px;padding:8px;background:var(--bar);border-top:1px solid var(--bd)}
 #ro{padding:12px;text-align:center;color:var(--sub);background:var(--bar);border-top:1px solid var(--bd);font-size:14px}
 .cmt{display:block;margin-top:4px;color:var(--ac);font-size:14px;text-align:left}
+.gtiles{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;width:100%}
+.gt{font-size:28px;background:var(--bg);border-radius:12px;padding:6px 0}
 </style>
 </head>
 <body>
@@ -197,7 +199,7 @@ const J=(k,d)=>{try{return JSON.parse(LS.get(k))||d}catch(e){return d}};
 const el=(t,p,c)=>{const e=document.createElement(t);Object.assign(e,p||{});(c||[]).forEach(x=>e.append(x));return e};
 let db,uid,chats=J("chats",[]),profile=J("profile",{n:LS.get("name")||"",a:"",b:""});
 const pa={},gm={};let mine={},stickHook=null;
-let wallet={h:0,used:[]},myGifts=[],walletHook=null,chatApi=null,walletMsg="",walletErr="",prem={},deferredInstall=null,lastBeat=0,archOpen=false;
+let wallet={h:0,used:[]},myGifts=[],walletHook=null,chatApi=null,walletMsg="",walletErr="",prem={},deferredInstall=null,lastBeat=0,archOpen=false,premErr="";
 const opt=k=>localStorage.getItem(k)==="1";const setOpt=(k,v)=>{try{localStorage.setItem(k,v?"1":"0")}catch(e){}};
 function applyTheme(){const t=LS.get("th")||"auto",d=document.documentElement;
   if(t==="auto")delete d.dataset.theme;else d.dataset.theme=t;
@@ -237,6 +239,8 @@ const T=x=>x&&x.ts&&x.ts.toMillis?{...x,ts:x.ts.toMillis()}:x;
 const errText=(e,what)=>(what||"Не удалось отправить")+" ("+(e.code||e.message)+")"+(e.code==="resource-exhausted"?"\nДостигнут дневной лимит бесплатного тарифа Firebase, он сбросится в течение суток.":e.code==="permission-denied"?"\nПроверь, что последние правила Firestore опубликованы.":"");
 function av(a,n,s){const d=el("div",{className:"av"});if(s)d.style.cssText="width:"+s+"px;height:"+s+"px;font-size:"+Math.round(s/2.3)+"px";
   if(a)d.append(el("img",{src:a}));else d.textContent=(n||"?").trim().charAt(0).toUpperCase();return d}
+const NAMEC=["#e17076","#e8a15c","#a695e7","#7bc862","#6ec9cb","#65aadd","#ee7aae","#c9b04a"];
+const nameColor=id=>{let h=0;for(const c of String(id))h=(h*31+c.charCodeAt(0))>>>0;return NAMEC[h%NAMEC.length]};
 const bdg=id=>{const p=prem[id];return p?" "+tier(p.no)+p.no+(p.st?" "+p.st:""):""};
 const ttlRaw=ch=>ch.dm?(ch.nick||(pa[ch.c]?pa[ch.c].n:ch.t)):ch.t;
 const ttl=ch=>ch.dm?ttlRaw(ch)+bdg(ch.dm):ch.t;
@@ -293,9 +297,14 @@ function viewProfile(p,ch){modal((box,close)=>{
     ...(shown!==real?[el("div",{textContent:"Настоящее имя: "+real,style:"color:var(--sub);font-size:13px"})]:[]),
     el("div",{textContent:p.b||"Пока ничего о себе не рассказал(а)",style:"color:var(--sub)"}),gl]));
   if(p.id)getDocs(query(collection(db,"users",p.id,"gifts"),orderBy("ts","desc"),limit(300))).then(sn=>{const items=sn.docs.map(d=>d.data()).filter(x=>!x.h);if(!items.length)return;
-    gl.append(el("div",{className:"sh",textContent:"Подарки ("+items.length+")"}));
-    items.forEach(x=>{const g=giftBy(x.g)||{e:"🎁",n:"Подарок"};
-      gl.append(el("div",{className:"wr"},[el("span",{textContent:g.e,style:"font-size:28px"}),el("div",{style:"flex:1;min-width:0"},[el("div",{textContent:g.n+" · "+(x.an?"от анонима":"от "+(x.fn||"друга"))}),...(x.m?[el("small",{textContent:"«"+x.m+"»",style:"color:var(--sub)"})]:[])])]))})}).catch(()=>{});
+    let all=false;
+    const draw=()=>{gl.innerHTML="";gl.append(el("div",{className:"sh",textContent:"Подарки ("+items.length+")"}));
+      const grid=el("div",{className:"gtiles"});
+      (all?items:items.slice(0,6)).forEach(x=>{const g=giftBy(x.g)||{e:"🎁",n:"Подарок"};
+        grid.append(el("button",{type:"button",className:"gt",textContent:g.e,onclick:()=>giftInfo(x)}))});
+      gl.append(grid);
+      if(items.length>6)gl.append(btn(all?"Свернуть":"Показать все ("+items.length+")",()=>{all=!all;draw()},"g"))};
+    draw()}).catch(()=>{});
   if(p.id&&p.id!==uid){
     const pr=el("div",{className:"who",style:"width:100%;text-align:left"});box.append(pr);
     if(prem[uid])getDoc(doc(db,"presence",p.id)).then(sn=>presLines(sn).forEach(t=>pr.append(el("div",{textContent:t})))).catch(()=>{});
@@ -342,6 +351,11 @@ async function sendGift(to,g,o){o=o||{};const room=cur;if(!room||!to||!to.id)ret
 async function sellGift(x,back){try{const ref=doc(db,"users",uid,"wallet","main"),cs=await getDoc(ref),cw=cs.exists()?cs.data():{h:0,used:[]};
   const bt=writeBatch(db);bt.set(ref,{h:(cw.h||0)+back,used:cw.used||[]});bt.delete(doc(db,"users",uid,"gifts",x.id));await bt.commit();alert("Продано: +"+back+" ❤️")}
   catch(e){alert(errText(e,"Не удалось продать"))}}
+function giftInfo(x){modal((box,close)=>{const g=giftBy(x.g)||{e:"🎁",n:"Подарок"};
+  box.append(el("div",{className:"c"},[el("div",{textContent:g.e,style:"font-size:72px"}),el("h3",{textContent:g.n}),
+    el("div",{textContent:x.an?"от анонима":"от "+(x.fn||"друга"),style:"color:var(--sub)"}),
+    ...(x.m?[el("div",{textContent:"«"+x.m+"»"})]:[]),
+    el("div",{textContent:new Date(x.ts).toLocaleDateString(),style:"color:var(--sub);font-size:13px"})]),btn("Закрыть",close,"g"))})}
 function giftMenu(x){modal((box,close)=>{
   const g=giftBy(x.g)||{e:"🎁",n:"Подарок",p:0},price=x.p!=null?x.p:g.p,back=Math.floor(price*.8);
   box.append(el("div",{className:"c"},[el("div",{textContent:g.e,style:"font-size:72px"}),el("h3",{textContent:g.n}),
@@ -498,7 +512,7 @@ function settings(){walletMsg="";view="settings";cur=null;listEl=null;chipsEl=nu
     row("Быстрая реакция","Ставится двойным тапом по сообщению",pill(LS.get("qr")||"❤️"),()=>pickQuick(draw));
     row("Новогодняя тема 🎄","Гирлянды сверху и лёгкий снежок",pill(opt("ny")?"Вкл":"Выкл"),()=>{setOpt("ny",!opt("ny"));applyTheme();draw()});
     sec("Подписка 💎");
-    row(prem[uid]?"Моя подписка "+tier(prem[uid].no)+prem[uid].no:"Подписка 💎","Значок с номером, онлайн/активность других и ещё 6 бонусов",pill(prem[uid]?"Настроить":"❤️ "+PREMIUM_PRICE),()=>prem[uid]?premSettings():premiumBuy());
+    row(prem[uid]?"Моя подписка "+tier(prem[uid].no)+prem[uid].no:"Подписка 💎",(premErr?"Не удалось загрузить подписки ("+premErr+")":"Значок с номером, онлайн/активность других и ещё 6 бонусов"),pill(prem[uid]?"Настроить":"❤️ "+PREMIUM_PRICE),()=>prem[uid]?premSettings():premiumBuy());
     row("Скрывать моё присутствие","Другие не увидят, что ты онлайн и с кем в чате",pill(opt("gh")?"Вкл":"Выкл"),()=>{setOpt("gh",!opt("gh"));beat(true);draw()});
     sec("Уведомления");
     row("Моя тема ntfy",myTopic,pill("Копировать"),()=>{try{navigator.clipboard.writeText(myTopic)}catch(e){}alert("Скопировано. Добавь эту тему в приложении ntfy (сервер ntfy.sh).")});
@@ -659,7 +673,7 @@ function openChat(room){
     if(!q&&docs.length>=msgLimit)msgs.append(el("button",{type:"button",className:"btn g",style:"align-self:center;padding:6px 14px",textContent:"Показать более ранние",onclick:()=>{anchor={h:msgs.scrollHeight,t:msgs.scrollTop};msgLimit+=200;subMsgs()}}));
     list.forEach(d=>{const m=d.data(),me=m.u===uid,p=mem[m.u]||{n:m.n,a:"",b:""};
       const b=el("div",{className:"m"+(me?" me":"")+(m.k==="s"||m.k==="g"?" st":"")});
-      if(!me&&m.k!=="s"&&!(m.k==="f"&&m.an&&m.to!==uid)){const nl=el("div",{className:"n",textContent:String((ch&&ch.dm&&m.u===ch.dm?ttlRaw(ch):p.n)||"")+bdg(m.u)});const pc=prem[m.u];if(pc&&pc.col)nl.style.color=pc.col;b.append(nl)};
+      if(!me&&m.k!=="s"&&!(m.k==="f"&&m.an&&m.to!==uid)){const nl=el("div",{className:"n",textContent:String((ch&&ch.dm&&m.u===ch.dm?ttlRaw(ch):p.n)||"")+bdg(m.u)});const pc=prem[m.u];nl.style.color=(pc&&pc.col)||nameColor(m.u);b.append(nl)};
       if(m.rp)b.append(el("div",{className:"q",onclick:e=>{e.stopPropagation();const t=document.getElementById("m-"+m.rp.i);if(t){t.scrollIntoView({block:"center"});t.classList.add("fl");setTimeout(()=>t.classList.remove("fl"),1200)}}},[el("b",{textContent:String(m.rp.n||"")}),el("div",{textContent:String(m.rp.x||"")})]));
       if(m.k==="i"&&String(m.x).startsWith("data:image/"))b.append(el("img",{src:m.x}));
       else if(m.k==="g"){const s=stickers[m.x];b.append(s?el("img",{src:s.x}):document.createTextNode("[стикер удалён]"))}
@@ -730,7 +744,7 @@ function openChat(room){
     un=onSnapshot(query(col,orderBy("ts"),limit(200)),s=>{list.innerHTML="";
       if(!s.size)list.append(el("div",{className:"hint",textContent:"Комментариев пока нет"}));
       s.docs.forEach(c=>{const x=c.data({serverTimestamps:"estimate"}),p=mem[x.u]||{n:x.n,a:""},nl=el("b",{textContent:(p.n||x.n||"")+bdg(x.u)}),pc=prem[x.u];
-        if(pc&&pc.col)nl.style.color=pc.col;
+        nl.style.color=(pc&&pc.col)||nameColor(x.u);
         const tm=x.ts&&x.ts.toMillis?new Date(x.ts.toMillis()).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}):"";
         const row=el("div",{className:"cm-r"},[av(p.a,p.n,30),el("div",{className:"cm-b"},[nl,el("div",{textContent:x.x}),el("small",{textContent:tm,style:"color:var(--sub)"})])]);
         if(x.u===uid)row.onclick=()=>{if(confirm("Удалить комментарий?")){const bt=writeBatch(db);bt.delete(c.ref);bt.update(mref(d.id),{cc:increment(-1)});bt.commit().catch(()=>{})}};
@@ -775,7 +789,7 @@ try{
     if(d.c&&/^[a-z0-9_-]{6,60}$/i.test(d.c)&&!chats.some(x=>x.c===d.c)){chats.push({c:d.c,t:d.n||"Личка",r:0,dm:d.f});save();watch(d.c);syncProfile(d.c)}
     deleteDoc(c.doc.ref).catch(()=>{});paint()})},()=>{});
   applyTheme();
-  onSnapshot(collection(db,"premium"),sn=>{prem={};sn.docs.forEach(d=>prem[d.id]=d.data());paint();if(chatApi&&chatApi.render)chatApi.render();if(walletHook)walletHook()},()=>{});beat(true);
+  onSnapshot(collection(db,"premium"),sn=>{prem={};sn.docs.forEach(d=>prem[d.id]=d.data());paint();if(chatApi&&chatApi.render)chatApi.render();premErr="";if(walletHook)walletHook()},e=>{premErr=e.code||"ошибка";if(walletHook)walletHook()});beat(true);
   onSnapshot(doc(db,"users",uid,"wallet","main"),sn=>{wallet=sn.exists()?sn.data():{h:0,used:[]};walletErr="";if(walletHook)walletHook()},e=>{walletErr=e.code||"ошибка";if(walletHook)walletHook()});
   onSnapshot(query(collection(db,"users",uid,"gifts"),orderBy("ts","desc"),limit(300)),sn=>{myGifts=sn.docs.map(d=>({id:d.id,...d.data()}));if(opt("hn"))sn.docChanges().forEach(c=>{if(c.type==="added"&&!c.doc.data().h)updateDoc(c.doc.ref,{h:true}).catch(()=>{})});if(walletHook)walletHook()},()=>{});
   home();
