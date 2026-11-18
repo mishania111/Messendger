@@ -1,0 +1,24 @@
+name: Sleep
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sleep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Усыпить сайт
+        run: |
+          mv index.html index_real.html
+          echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Спит</title></head><body style="background:#000;color:#0f0;font-family:monospace;text-align:center;padding-top:20vh;"><h1>МЕССЕНДЖЕР СПИТ</h1><p>Владелец ушел. Возвращайся позже.</p></body></html>' > index.html
+
+      - name: Commit
+        run: |
+          git config user.name "SleepBot"
+          git config user.email "bot@sleep.com"
+          git add -A
+          git commit -m "Сайт уснул" || echo "no changes"
+          git push
