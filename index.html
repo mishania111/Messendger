@@ -221,6 +221,22 @@ function nyOn(){nyOff();const W=innerWidth,H=innerHeight,COL=["#ff4d4d","#ffd166
   window.addEventListener("resize",nyOn)}
 window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();deferredInstall=e;if(walletHook)walletHook()});
 if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js").catch(()=>{});
+const last={},watchers={};let cur=null,view="home",unsubs=[],listEl=null,chipsEl=null;
+if(!chats.length&&LS.get("room"))chats.push({c:LS.get("room"),t:LS.get("room"),r:0});
+const save=()=>{LS.set("chats",JSON.stringify(chats));LS.set("profile",JSON.stringify(profile))};
+const myTopic=LS.get("topic")||(()=>{const t="chat"+crypto.randomUUID().replace(/-/g,"").slice(0,20);LS.set("topic",t);return t})();
+const norm=v=>v.trim().toLowerCase().replace(/[^a-zа-я0-9_-]/gi,"");
+const rnd=()=>[...crypto.getRandomValues(new Uint8Array(8))].map(b=>b.toString(16).padStart(2,"0")).join("");
+const inviteLink=c=>location.href.split("#")[0]+"#"+c;
+
+const REACTS=["👍","❤️","😂","😮","😢","🔥","😘","💀","🤓","😎","🥹","🧐","😤","🤯","😡","😱","🤭","🫪","👎"];
+const audios={},vids={};
+const fmt=s=>Math.floor(s/60)+":"+String(Math.floor(s%60)).padStart(2,"0");
+const blobToData=b=>new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(r.result);r.onerror=no;r.readAsDataURL(b)});
+const T=x=>x&&x.ts&&x.ts.toMillis?{...x,ts:x.ts.toMillis()}:x;
+const errText=(e,what)=>(what||"Не удалось отправить")+" ("+(e.code||e.message)+")"+(e.code==="resource-exhausted"?"\nДостигнут дневной лимит бесплатного тарифа Firebase, он сбросится в течение суток.":e.code==="permission-denied"?"\nПроверь, что последние правила Firestore опубликованы.":"");
+function av(a,n,s){const d=el("div",{className:"av"});if(s)d.style.cssText="width:"+s+"px;height:"+s+"px;font-size:"+Math.round(s/2.3)+"px";
+  if(a)d.append(el("img",{src:a}));else d.textContent=(n||"?").trim().charAt(0).toUpperCase();return d}
 const bdg=id=>{const p=prem[id];return p?" "+tier(p.no)+p.no+(p.st?" "+p.st:""):""};
 const ttlRaw=ch=>ch.dm?(ch.nick||(pa[ch.c]?pa[ch.c].n:ch.t)):ch.t;
 const ttl=ch=>ch.dm?ttlRaw(ch)+bdg(ch.dm):ch.t;
