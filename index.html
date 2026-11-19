@@ -136,8 +136,8 @@ img,video{max-width:100%}
 <div id="app"></div>
 <script type="module">
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import {getAuth,onAuthStateChanged,GoogleAuthProvider,signInWithPopup,signInWithRedirect,getRedirectResult,linkWithPopup,linkWithRedirect,signInWithCredential,signOut} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import {getFirestore,collection,addDoc,doc,setDoc,getDoc,getDocs,writeBatch,updateDoc,deleteDoc,arrayUnion,arrayRemove,FieldPath,serverTimestamp,increment,query,orderBy,limit,onSnapshot} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import {getAuth,onAuthStateChanged,GoogleAuthProvider,OAuthProvider,createUserWithEmailAndPassword,signInWithEmailAndPassword,EmailAuthProvider,linkWithCredential,sendPasswordResetEmail,signInWithPopup,signInWithRedirect,getRedirectResult,linkWithPopup,linkWithRedirect,signInWithCredential,signOut} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import {getFirestore,collection,collectionGroup,Timestamp,addDoc,doc,setDoc,getDoc,getDocs,writeBatch,updateDoc,deleteDoc,arrayUnion,arrayRemove,FieldPath,serverTimestamp,increment,query,orderBy,limit,onSnapshot} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBoWv-mPq93B7o3HSOwLB0uAh6sleDxpG8",
@@ -151,7 +151,7 @@ const NTFY_URL="https://ntfy.sh";
 const NTFY_PREVIEW=false; // true: текст сообщения виден в пуше (пройдёт через сервер ntfy.sh)
 
 // =====================================================================
-// ПРОМОКОДЫ — СЮДА ДОБАВЛЯЙ СВОИ
+// СТАРЫЕ ПРОМОКОДЫ — нужны только для одноразового импорта в базу (Админ-панель → Список промокодов)
 // Формат строки:  "КОД": сколько_сердечек,
 // Регистр не важен. Каждый код активируется один раз на одном устройстве.
 // Чтобы убрать промокод — удали его строку.
@@ -194,6 +194,12 @@ const PREMIUM_PRICE=50000;
 const PREM_GIFT={id:"premium",e:"💎",n:"Подписка",p:PREMIUM_PRICE};
 const tier=n=>n<=10?"👑":n<=100?"💎":"💠";
 const PERKS=["💎 Значок с номером покупки рядом с ником (виден всем, даже если контакт переименован)","👀 Видеть, с кем человек сейчас в чате","🟢 Видеть, онлайн ли человек","🕒 Видеть время последней активности","🥷 Невидимка: скрыть своё присутствие и всё равно смотреть чужое","🎨 Свой цвет ника в чатах","😎 Эмодзи-статус рядом с ником","📌 Закреплять любое число чатов (без подписки — 3)","🎙 Голосовые до 3 минут (без подписки — 90 секунд)"];
+// =====================================================================
+// АДМИНИСТРАТОР — Google-почта(ы) админа. ЭТОТ ЖЕ список должен стоять в правилах Firestore
+// (функция isAdmin в firestore-rules.txt). Замени admin@example.com на свою почту в ОБОИХ местах.
+// =====================================================================
+const ADMIN_EMAILS=["admin@example.com"];
+const isAdmin=()=>{const u=authRef&&authRef.currentUser;return !!(u&&u.email&&u.emailVerified&&ADMIN_EMAILS.includes(u.email.toLowerCase()))};
 const PROMO_MAP=Object.fromEntries(Object.entries(PROMOS).map(([k,v])=>[k.trim().toUpperCase(),v]));
 const giftBy=id=>GIFTS.find(g=>g.id===id)||(id==="premium"?PREM_GIFT:null);
 
@@ -273,7 +279,7 @@ function markRead(){const ch=chats.find(x=>x.c===cur);if(!ch)return;ch.r=Math.ma
 function watch(c){if(watchers[c])return;const ch=chats.find(x=>x.c===c),us=[];
   us.push(onSnapshot(query(collection(db,"chats",c,"messages"),orderBy("ts","desc"),limit(1)),s=>{last[c]=s.docs[0]?T(s.docs[0].data({serverTimestamps:"estimate"})):null;if(cur===c)markRead();paint()},()=>{}));
   if(ch&&ch.dm)us.push(onSnapshot(collection(db,"chats",c,"members"),s=>{s.docs.forEach(d=>{if(d.id===ch.dm)pa[c]={id:d.id,...d.data()}});paint()},()=>{}));
-  else us.push(onSnapshot(doc(db,"chats",c,"meta","info"),s=>{const was=!!(gm[c]&&gm[c].ch);gm[c]=s.exists()?s.data():{};if(cur===c&&view==="chat"&&was!==!!gm[c].ch)openChat(c);else paint()},()=>{}));
+  else us.push(onSnapshot(doc(db,"chats",c,"meta","info"),s=>{const was=!!(gm[c]&&gm[c].ch);gm[c]=s.exists()?s.data():{};if(cur===c&&view==="chat"&&was!==!!gm[c].ch)openChat(c);else{paint();if(cur===c&&chatApi&&chatApi.render)chatApi.render()}},()=>{}));
   watchers[c]=()=>us.forEach(u=>u())}
 function paint(){view==="home"?renderList():renderChips()}
 
@@ -297,7 +303,7 @@ const viewAva=p=>showPhoto(p&&p.a,()=>p.id?fullAva(p.id):null);
 function renameNick(ch){const v=prompt("Как назвать контакт у себя? Пусто — вернуть настоящее имя",ch.nick||ttlRaw(ch));
   if(v===null)return;ch.nick=v.trim();save();paint();if(view==="chat"&&cur===ch.c)openChat(ch.c)}
 
-function viewProfile(p,ch){modal((box,close)=>{
+function viewProfile(p,ch,ctx){modal((box,close)=>{
   const real=p.n||"Без имени",shown=ch&&ch.nick?ch.nick:real;
   const ava=av(p.a,p.n,110);ava.style.cursor="pointer";ava.onclick=()=>viewAva(p);
   const gl=el("div",{className:"who",style:"width:100%;text-align:left"});
@@ -315,25 +321,25 @@ function viewProfile(p,ch){modal((box,close)=>{
     draw()}).catch(()=>{});
   if(p.id&&p.id!==uid){
     const pr=el("div",{className:"who",style:"width:100%;text-align:left"});box.append(pr);
-    if(prem[uid])getDoc(doc(db,"presence",p.id)).then(sn=>presLines(sn).forEach(t=>pr.append(el("div",{textContent:t})))).catch(()=>{});
+    if(prem[uid]||isAdmin())getDoc(doc(db,isAdmin()?"presence_admin":"presence",p.id)).then(sn=>presLines(sn).forEach(t=>pr.append(el("div",{textContent:t})))).catch(()=>{});
     else pr.append(el("button",{type:"button",className:"btn g",textContent:"🔒 Онлайн, активность и «с кем в чате» — по подписке 💎",onclick:()=>{close();premiumBuy()}}));
     if(cur)box.append(btn("🎁 Подарить",()=>{close();giftPicker(p)}));
     if(!prem[p.id])box.append(btn("💎 Подарить подписку",()=>{close();premiumBuy(p)},"g"));
     if(!(ch&&ch.dm))box.append(btn("Написать лично",()=>{close();startDm(p)}));
     if(ch&&ch.dm)box.append(btn("Изменить имя (только у меня)",()=>{close();renameNick(ch)},"g"))}
+  if(ctx&&ctx.iAmOwner&&p.id&&p.id!==uid)box.append(btn("🚫 Исключить из группы",()=>{if(confirm("Исключить «"+(p.n||"участника")+"» из группы? Он не сможет читать и писать, пока владелец не вернёт доступ."))ctx.kick()},"r"));
   box.append(btn("Закрыть",close,"g"))})}
 
-async function redeem(raw){const code=raw.trim().toUpperCase();if(!code)return"Введи промокод";
-  if(!Object.prototype.hasOwnProperty.call(PROMO_MAP,code))return"Такого промокода нет";
-  const ref=doc(db,"users",uid,"wallet","main");
-  const cs=await getDoc(ref),cw=cs.exists()?cs.data():{h:0,used:[]};
-  if((cw.used||[]).includes(code))return"Этот промокод уже активирован";
-  const n=PROMO_MAP[code],data={h:(cw.h||0)+n,used:[...(cw.used||[]),code]};
-  await setDoc(ref,data);
-  const chk=await getDoc(ref);
-  if(!chk.exists()||chk.data().h!==data.h)throw Object.assign(new Error("баланс не сохранился"),{code:"verify-failed"});
-  wallet=chk.data();
-  return"Готово! +"+n+" ❤️"}
+async function redeem(raw){const code=raw.trim().toUpperCase().replace(/[^A-Z0-9_-]/g,"");if(code.length<3)return"Введи промокод";
+  const pref=doc(db,"promos",code),ps=await getDoc(pref);if(!ps.exists())return"Такого промокода нет";
+  const p=ps.data();
+  if(p.exp&&p.exp.toMillis&&p.exp.toMillis()<Date.now())return"Срок действия промокода истёк";
+  if(p.max&&(p.used||0)>=p.max)return"Промокод уже использован максимальное число раз";
+  const rref=doc(db,"promos",code,"redeemed",uid);if((await getDoc(rref)).exists())return"Этот промокод уже активирован";
+  const wref=doc(db,"users",uid,"wallet","main"),ws=await getDoc(wref);if(!ws.exists())await setDoc(wref,{h:0});
+  const bt=writeBatch(db);bt.set(wref,{h:(ws.exists()?ws.data().h||0:0)+p.h,lp:code});bt.set(rref,{ts:serverTimestamp()});bt.update(pref,{used:increment(1)});
+  await bt.commit();return"Готово! +"+p.h+" ❤️"}
+async function ensureWallet(){try{const r=doc(db,"users",uid,"wallet","main");if(!(await getDoc(r)).exists())await setDoc(r,{h:0})}catch(e){}}
 
 function giftPicker(to){if(!cur){alert("Открой чат, чтобы отправить подарок");return}
   modal((box,close)=>{
@@ -351,21 +357,22 @@ async function sendGift(to,g,o){o=o||{};const room=cur;if(!room||!to||!to.id)ret
   try{const ref=doc(db,"users",uid,"wallet","main"),cs=await getDoc(ref),cw=cs.exists()?cs.data():{h:0,used:[]},bal=cw.h||0;
     if(bal<g.p){alert("Не хватает сердечек: нужно "+g.p+", у тебя "+bal+". Промокоды вводятся в меню профиля (аватарка вверху списка чатов).");return}
     const bt=writeBatch(db);
-    bt.set(ref,{h:bal-g.p,used:cw.used||[]});
+    bt.set(ref,{h:bal-g.p});
     bt.set(doc(collection(db,"chats",room,"messages")),{k:"f",x:g.id,to:to.id,tn:to.n||"",u:uid,n:profile.n,ts:serverTimestamp(),...(o.note?{gm:o.note}:{}),...(o.an?{an:true}:{})});
     bt.set(doc(collection(db,"users",to.id,"gifts")),{g:g.id,f:uid,fn:profile.n,ts:Date.now(),p:g.p,...(o.note?{m:o.note}:{}),...(o.an?{an:true}:{})});
     await bt.commit();playFx(g);if(chatApi)chatApi.notify({k:"f",an:!!o.an})}
   catch(e){alert(errText(e,"Не удалось отправить подарок"))}}
-async function sellGift(x,back){try{const ref=doc(db,"users",uid,"wallet","main"),cs=await getDoc(ref),cw=cs.exists()?cs.data():{h:0,used:[]};
-  const bt=writeBatch(db);bt.set(ref,{h:(cw.h||0)+back,used:cw.used||[]});bt.delete(doc(db,"users",uid,"gifts",x.id));await bt.commit();alert("Продано: +"+back+" ❤️")}
-  catch(e){alert(errText(e,"Не удалось продать"))}}
+async function sellGift(x,back,quiet){try{const ref=doc(db,"users",uid,"wallet","main"),cs=await getDoc(ref),cw=cs.exists()?cs.data():{h:0};
+  const bt=writeBatch(db);bt.set(ref,{h:(cw.h||0)+back,sg:x.id});bt.delete(doc(db,"users",uid,"gifts",x.id));await bt.commit();
+  if(!quiet)alert("Продано: +"+back+" ❤️");return true}
+  catch(e){if(!quiet)alert(errText(e,"Не удалось продать"));return false}}
 function giftInfo(x){modal((box,close)=>{const g=giftBy(x.g)||{e:"🎁",n:"Подарок"};
   box.append(el("div",{className:"c"},[el("div",{textContent:g.e,style:"font-size:72px"}),el("h3",{textContent:g.n}),
     el("div",{textContent:x.an?"от анонима":"от "+(x.fn||"друга"),style:"color:var(--sub)"}),
     ...(x.m?[el("div",{textContent:"«"+x.m+"»"})]:[]),
     el("div",{textContent:new Date(x.ts).toLocaleDateString(),style:"color:var(--sub);font-size:13px"})]),btn("Закрыть",close,"g"))})}
 function giftMenu(x){modal((box,close)=>{
-  const g=giftBy(x.g)||{e:"🎁",n:"Подарок",p:0},price=x.p!=null?x.p:g.p,back=Math.floor(price*.8);
+  const g=giftBy(x.g)||{e:"🎁",n:"Подарок",p:0},price=x.p||0,back=Math.floor(price*8/10);
   box.append(el("div",{className:"c"},[el("div",{textContent:g.e,style:"font-size:72px"}),el("h3",{textContent:g.n}),
     el("div",{textContent:"от "+(x.fn||"друга")+(x.an?" (анонимно)":""),style:"color:var(--sub)"}),...(x.m?[el("div",{textContent:"«"+x.m+"»"})]:[]),
     ...(x.h?[el("div",{textContent:"Скрыт из профиля",style:"color:var(--sub);font-size:13px"})]:[])]),
@@ -387,6 +394,7 @@ function beat(force){if(!uid||!profile.n||document.visibilityState!=="visible")r
   const n=Date.now();if(!force&&n-lastBeat<8000)return;lastBeat=n;
   const ch=cur&&chats.find(x=>x.c===cur);
   const w=ch?(ch.dm?"с "+((pa[ch.c]||{}).n||"кем-то"):"в чате «"+ch.t+"»"):"";
+  setDoc(doc(db,"presence_admin",uid),{h:false,w,ts:serverTimestamp()}).catch(()=>{});
   setDoc(doc(db,"presence",uid),opt("gh")?{h:true,w:"",ts:serverTimestamp()}:{h:false,w,ts:serverTimestamp()}).catch(()=>{})}
 setInterval(()=>beat(true),45000);document.addEventListener("visibilitychange",()=>beat(true));
 function presLines(sn){if(!sn.exists())return["⚪ Нет данных об активности"];const d=sn.data();
@@ -413,7 +421,7 @@ async function buyPremium(tg){
       const ref=doc(db,"users",uid,"wallet","main"),cs=await getDoc(ref),cw=cs.exists()?cs.data():{h:0,used:[]};
       if((cw.h||0)<PREMIUM_PRICE){alert("Не хватает сердечек: нужно "+PREMIUM_PRICE+", у тебя "+(cw.h||0));return}
       const bt=writeBatch(db);
-      bt.set(ref,{h:cw.h-PREMIUM_PRICE,used:cw.used||[]});
+      bt.set(ref,{h:cw.h-PREMIUM_PRICE});
       bt.set(doc(db,"premium",tg.id),{no:n,by:uid,ts:serverTimestamp()});
       bt.set(doc(db,"premno",String(n)),{n,u:tg.id});
       if(tg.id!==uid)bt.set(doc(collection(db,"users",tg.id,"gifts")),{g:"premium",f:uid,fn:profile.n,ts:Date.now(),p:PREMIUM_PRICE});
@@ -426,6 +434,89 @@ function premSettings(){const p=prem[uid];if(!p)return;modal((box,close)=>{
   const save=c=>{updateDoc(doc(db,"premium",uid),{st:st.value.trim(),col:c}).catch(e=>alert(errText(e,"Не удалось сохранить")));close()};
   box.append(el("h3",{textContent:"Моя подписка "+tier(p.no)+p.no}),el("div",{textContent:"Эмодзи-статус рядом с ником"}),st,el("div",{textContent:"Цвет ника в чатах"}),col,
     btn("Сохранить",()=>save(col.value)),btn("Убрать цвет",()=>save(""),"g"),btn("Закрыть",close,"g"))})}
+async function allMembers(){const sn=await getDocs(collectionGroup(db,"members"));return sn.docs.map(d=>({room:d.ref.parent.parent.id,id:d.id,ref:d.ref,...d.data()}))}
+async function runOps(ops){for(let i=0;i<ops.length;i+=400){const bt=writeBatch(db);ops.slice(i,i+400).forEach(([k,r,d])=>k==="del"?bt.delete(r):bt.set(r,d));await bt.commit()}}
+function adminPanel(){view="admin";cur=null;listEl=null;chipsEl=null;walletHook=null;unsubs.forEach(u=>u());unsubs=[];app.innerHTML="";
+  const body=el("div",{id:"list"});
+  app.append(el("header",{},[el("button",{className:"ico",textContent:"←",onclick:()=>settings()}),el("b",{textContent:"🛡 Админ-панель"})]),body);
+  const sec=t=>body.append(el("div",{className:"sec",textContent:t}));
+  const row=(t,sub,fn)=>body.append(el("div",{className:"srow",onclick:fn},[el("div",{className:"st"},[el("div",{textContent:t}),...(sub?[el("small",{textContent:sub})]:[])])]));
+  sec("Режимы");
+  row("Невидимка",opt("gh")?"Включена: другие не видят, когда ты онлайн. Ты видишь всех.":"Выключена",()=>{setOpt("gh",!opt("gh"));beat(true);adminPanel()});
+  sec("Промокоды");
+  row("Создать промокод","Вечный, на срок или с лимитом использований",promoForm);
+  row("Список промокодов","Использование, сроки, удаление, импорт старых",promoList);
+  sec("Чаты");
+  row("Все чаты (в том числе закрытые и личные)","Открываются в режиме наблюдателя",roomsList);
+  sec("Аккаунты");
+  row("Аккаунты и дубликаты","Перенос подписки, сердец и подарков, удаление",accountsList);
+  row("Перенумеровать подписки подряд","1, 2, 3… без пропусков (порядок сохраняется)",async()=>{if(!confirm("Перенумеровать подписки подряд?"))return;try{await renumberPremium();alert("Готово")}catch(e){alert(errText(e,"Не удалось"))}})}
+function promoForm(){modal((box,close)=>{
+  const c=el("input",{placeholder:"Код (латиница, цифры)",maxLength:30,style:"text-transform:uppercase"}),h=el("input",{type:"number",placeholder:"Сколько сердечек",min:"1"}),
+    d=el("input",{type:"number",placeholder:"Срок действия, дней (0 = вечный)",min:"0",value:"0"}),m=el("input",{type:"number",placeholder:"Лимит использований (0 = без лимита)",min:"0",value:"0"});
+  box.append(el("h3",{textContent:"Новый промокод"}),c,h,d,m,btn("Создать",async()=>{
+    const code=c.value.trim().toUpperCase().replace(/[^A-Z0-9_-]/g,""),hv=parseInt(h.value)||0,dv=parseInt(d.value)||0,mv=parseInt(m.value)||0;
+    if(code.length<3||hv<1){alert("Нужен код (от 3 символов) и число сердечек");return}
+    try{await setDoc(doc(db,"promos",code),{h:hv,used:0,max:mv,ts:serverTimestamp(),...(dv>0?{exp:Timestamp.fromMillis(Date.now()+dv*864e5)}:{})});alert("Промокод "+code+" создан");close()}
+    catch(e){alert(errText(e,"Не удалось создать"))}}),btn("Закрыть",close,"g"))})}
+async function promoList(){try{const sn=await getDocs(collection(db,"promos"));
+  modal((box,close)=>{box.append(el("h3",{textContent:"Промокоды ("+sn.size+")"}));
+    sn.docs.forEach(d=>{const p=d.data(),exp=p.exp&&p.exp.toMillis?new Date(p.exp.toMillis()):null,dead=(exp&&exp<new Date())||(p.max&&(p.used||0)>=p.max);
+      box.append(el("div",{className:"wr"},[el("div",{style:"flex:1;min-width:0"},[el("div",{textContent:d.id+" · ❤️ "+p.h+(dead?" · ⛔":"")}),
+        el("small",{textContent:"использован "+(p.used||0)+(p.max?"/"+p.max:" раз")+" · "+(exp?"до "+exp.toLocaleDateString():"вечный"),style:"color:var(--sub)"})]),
+        btn("🗑",()=>{if(confirm("Удалить "+d.id+"?")){deleteDoc(d.ref).catch(()=>{});close()}},"g")]))});
+    box.append(btn("Импортировать из старого списка в коде",async()=>{let n=0;for(const [k,v] of Object.entries(PROMO_MAP)){if(!sn.docs.some(x=>x.id===k)){try{await setDoc(doc(db,"promos",k),{h:v,used:0,max:0,ts:serverTimestamp()});n++}catch(e){}}}alert("Импортировано: "+n);close()},"g"),btn("Закрыть",close,"g"))})}
+  catch(e){alert(errText(e,"Не удалось загрузить промокоды"))}}
+async function roomsList(){try{const all=await allMembers(),rooms={};all.forEach(m=>{(rooms[m.room]=rooms[m.room]||[]).push(m)});
+  modal((box,close)=>{box.append(el("h3",{textContent:"Все чаты ("+Object.keys(rooms).length+")"}));
+    const q=el("input",{placeholder:"Поиск по имени или коду"}),list=el("div",{className:"who"});box.append(q,list);
+    const draw=()=>{list.innerHTML="";const k=q.value.trim().toLowerCase();
+      Object.entries(rooms).filter(([c,ms])=>!k||c.includes(k)||ms.some(m=>(m.n||"").toLowerCase().includes(k))).sort((a,b)=>b[1].length-a[1].length).forEach(([c,ms])=>{const dm=c.startsWith("dm");
+        list.append(el("div",{className:"wr",style:"cursor:pointer",onclick:()=>{close();openChat(c,true)}},[el("span",{textContent:dm?"💬":"👥",style:"font-size:24px"}),
+          el("div",{style:"flex:1;min-width:0"},[el("div",{textContent:ms.map(m=>m.n||"?").join(", ")}),el("small",{textContent:(dm?"личка · ":"")+ms.length+" уч. · "+c.slice(0,10),style:"color:var(--sub)"})])]))})};
+    q.oninput=draw;draw();box.append(btn("Закрыть",close,"g"))})}catch(e){alert(errText(e,"Не удалось загрузить чаты"))}}
+async function accountsList(){try{const all=await allMembers(),ps=await getDocs(collection(db,"premium")),pm={};ps.docs.forEach(d=>pm[d.id]=d.data());
+  const acc={};all.forEach(m=>{const a=acc[m.id]=acc[m.id]||{id:m.id,n:m.n,a:m.a,rooms:0,ts:0};a.rooms++;if((m.ts||0)>=a.ts){a.ts=m.ts||0;a.n=m.n;a.a=m.a}});
+  Object.keys(pm).forEach(id=>{if(!acc[id])acc[id]={id,n:"(нет в чатах)",a:"",rooms:0,ts:0}});
+  const list=Object.values(acc).sort((x,y)=>(x.n||"").localeCompare(y.n||"")),cnt={};list.forEach(a=>cnt[a.n]=(cnt[a.n]||0)+1);
+  modal((box,close)=>{box.append(el("h3",{textContent:"Аккаунты ("+list.length+")"}),el("div",{textContent:"⚠ — одинаковые имена (возможные дубликаты)",style:"color:var(--sub);font-size:13px"}));
+    list.forEach(a=>{const p=pm[a.id];box.append(el("div",{className:"row",style:"border-radius:12px",onclick:()=>{close();accountMenu(a,list,pm,all)}},[av(a.a,a.n,40),
+      el("div",{className:"mid"},[el("b",{textContent:(cnt[a.n]>1?"⚠ ":"")+(a.n||"?")+(p?" "+tier(p.no)+p.no:"")}),el("small",{textContent:"чатов: "+a.rooms+(a.ts?" · был(а) "+new Date(a.ts).toLocaleDateString():"")+" · "+a.id.slice(0,6)})])]))});
+    box.append(btn("Закрыть",close,"g"))})}catch(e){alert(errText(e,"Не удалось загрузить аккаунты"))}}
+function pickAccount(list,cb){modal((box,close)=>{box.append(el("h3",{textContent:"Выбери аккаунт-получатель"}));
+  list.forEach(a=>box.append(el("div",{className:"row",style:"border-radius:12px",onclick:()=>{close();cb(a)}},[av(a.a,a.n,36),el("div",{className:"mid"},[el("b",{textContent:a.n||"?"}),el("small",{textContent:"чатов: "+a.rooms+" · "+a.id.slice(0,6)})])])));
+  box.append(btn("Закрыть",close,"g"))})}
+function accountMenu(a,list,pm,all){modal((box,close)=>{
+  box.append(el("h3",{textContent:(a.n||"?")+(pm[a.id]?" "+tier(pm[a.id].no)+pm[a.id].no:"")}),el("small",{textContent:"uid: "+a.id,style:"color:var(--sub);word-break:break-all"}),
+    btn("➡️ Перенести подписку, сердца и подарки на…",()=>{close();pickAccount(list.filter(x=>x.id!==a.id),dst=>{if(confirm("Перенести данные «"+(a.n||"?")+"» на «"+(dst.n||"?")+"» и удалить старый аккаунт из чатов и базы?"))mergeAccount(a.id,dst.id,all).then(()=>alert("Готово. Старую запись входа можно удалить в консоли Firebase: Authentication → Users.")).catch(e=>alert(errText(e,"Не удалось перенести")))})}),
+    btn("👁 Реальное присутствие",async()=>{try{alert(presLines(await getDoc(doc(db,"presence_admin",a.id))).join("\n"))}catch(e){alert(errText(e,"Не удалось"))}},"g"),
+    btn("❤️ Изменить баланс",async()=>{const v=prompt("Новый баланс сердец","0");if(v===null)return;try{await setDoc(doc(db,"users",a.id,"wallet","main"),{h:Math.max(0,parseInt(v)||0)});alert("Готово")}catch(e){alert(errText(e,"Не удалось"))}},"g"),
+    btn("🗑 Удалить данные аккаунта",()=>{if(confirm("Удалить «"+(a.n||"?")+"» из чатов и базы (сердца, подарки, подписка)? Это нельзя отменить."))purgeData(a.id,all,true).then(()=>alert("Удалено. Запись входа можно удалить в консоли Firebase: Authentication → Users.")).catch(e=>alert(errText(e,"Не удалось")))},"r"),
+    btn("Закрыть",close,"g"))})}
+async function purgeData(src,all,withPremium){const ops=[];
+  (all||[]).filter(m=>m.id===src).forEach(m=>ops.push(["del",m.ref]));
+  ops.push(["del",doc(db,"presence",src)],["del",doc(db,"presence_admin",src)],["del",doc(db,"users",src,"wallet","main")],["del",doc(db,"users",src,"data","state")],["del",doc(db,"users",src,"avatar","full")]);
+  for(const c of ["gifts","stickers","inbox"]){const sn=await getDocs(collection(db,"users",src,c));sn.docs.forEach(d=>ops.push(["del",d.ref]))}
+  if(withPremium){const ps=await getDoc(doc(db,"premium",src));if(ps.exists()){ops.push(["del",ps.ref]);ops.push(["del",doc(db,"premno",String(ps.data().no))])}}
+  await runOps(ops)}
+async function mergeAccount(src,dst,all){const ops=[];
+  const [ps,pd,ws,wd]=await Promise.all([getDoc(doc(db,"premium",src)),getDoc(doc(db,"premium",dst)),getDoc(doc(db,"users",src,"wallet","main")),getDoc(doc(db,"users",dst,"wallet","main"))]);
+  let h=(wd.exists()?wd.data().h||0:0)+(ws.exists()?ws.data().h||0:0);
+  if(ps.exists()){const a=ps.data();
+    if(!pd.exists()){ops.push(["set",doc(db,"premium",dst),a],["set",doc(db,"premno",String(a.no)),{n:a.no,u:dst}])}
+    else{const b=pd.data();
+      if(a.no<b.no){ops.push(["set",doc(db,"premium",dst),{...a,st:a.st||b.st||"",col:a.col||b.col||""}],["set",doc(db,"premno",String(a.no)),{n:a.no,u:dst}],["del",doc(db,"premno",String(b.no))])}
+      else ops.push(["del",doc(db,"premno",String(a.no))]);
+      if(confirm("У получателя уже была своя подписка. Вернуть ему ❤️ "+PREMIUM_PRICE+" за лишнюю?"))h+=PREMIUM_PRICE}
+    ops.push(["del",ps.ref])}
+  ops.push(["set",doc(db,"users",dst,"wallet","main"),{h}]);
+  for(const c of ["gifts","stickers"]){const sn=await getDocs(collection(db,"users",src,c));sn.docs.forEach(d=>ops.push(["set",doc(db,"users",dst,c,d.id),d.data()]))}
+  await runOps(ops);await purgeData(src,all,false)}
+async function renumberPremium(){const sn=await getDocs(collection(db,"premium")),old=await getDocs(collection(db,"premno"));
+  const arr=sn.docs.map(d=>({id:d.id,...d.data()})).sort((x,y)=>x.no-y.no),ops=[];
+  old.docs.forEach(d=>ops.push(["del",d.ref]));
+  arr.forEach((p,i)=>{const {id,...rest}=p;ops.push(["set",doc(db,"premno",String(i+1)),{n:i+1,u:id}],["set",doc(db,"premium",id),{...rest,no:i+1}])});
+  await runOps(ops)}
 function pickQuick(cb){modal((box,close)=>{
   box.append(el("h3",{textContent:"Быстрая реакция (двойной тап)"}));
   const g=el("div",{className:"c",style:"flex-direction:row;flex-wrap:wrap;justify-content:center;gap:2px"});
@@ -471,11 +562,10 @@ async function recHeart(){const api=chatApi;if(!api)return;
   document.body.append(ov)}
 async function bulkHide(items,hide){const list=items.filter(x=>!!x.h!==hide);if(!list.length)return;
   try{const bt=writeBatch(db);list.forEach(x=>bt.update(doc(db,"users",uid,"gifts",x.id),{h:hide}));await bt.commit()}catch(e){alert(errText(e,"Не удалось изменить"))}}
-const giftBack=x=>Math.floor((x.p!=null?x.p:(giftBy(x.g)||{p:0}).p)*.8);
-async function bulkSell(items){items=items.filter(x=>x.g!=="premium");if(!items.length){alert("Подписку продать нельзя");return}const back=items.reduce((a,x)=>a+giftBack(x),0);
-  try{const ref=doc(db,"users",uid,"wallet","main"),cs=await getDoc(ref),cw=cs.exists()?cs.data():{h:0,used:[]};
-    const bt=writeBatch(db);bt.set(ref,{h:(cw.h||0)+back,used:cw.used||[]});items.forEach(x=>bt.delete(doc(db,"users",uid,"gifts",x.id)));await bt.commit();
-    alert("Продано: "+items.length+", +"+back+" ❤️")}catch(e){alert(errText(e,"Не удалось продать"))}}
+const giftBack=x=>Math.floor((x.p||0)*8/10);
+async function bulkSell(items){items=items.filter(x=>x.g!=="premium");if(!items.length){alert("Подписку продать нельзя");return}
+  let n=0,sum=0;for(const x of items){const back=giftBack(x);if(await sellGift(x,back,true)){n++;sum+=back}}
+  alert("Продано: "+n+" из "+items.length+", +"+sum+" ❤️")}
 async function bulkDelete(items){try{const bt=writeBatch(db);items.forEach(x=>bt.delete(doc(db,"users",uid,"gifts",x.id)));await bt.commit()}catch(e){alert(errText(e,"Не удалось удалить"))}}
 function showMyGifts(){modal((box,close)=>{
   let selecting=false;const sel=new Set();
@@ -528,13 +618,14 @@ function settings(){walletMsg="";view="settings";cur=null;listEl=null;chipsEl=nu
     sec("Приватность");
     tog("Скрывать, что я прочитал","Другие не увидят, что ты прочитал(а) сообщение","hr");
     tog("Скрывать «печатает…»","Другие не увидят, что ты набираешь текст","ht");
+    if(isAdmin()){sec("Администратор");row("🛡 Админ-панель","Чаты, промокоды, аккаунты",pill("Открыть"),adminPanel)}
     sec("Приложение");
     {const isApp=matchMedia("(display-mode: standalone)").matches;
      row("Установить на телефон",isApp?"Уже запущено как приложение":"Откроется как обычное приложение, без адресной строки",pill(isApp?"✓":"Установить"),async()=>{
        if(deferredInstall){deferredInstall.prompt();try{await deferredInstall.userChoice}catch(e){}deferredInstall=null}
        else alert("Android (Chrome): меню ⋮ → «Установить приложение» или «Добавить на главный экран».\niPhone (Safari): «Поделиться» → «На экран Домой».")})}
     sec("Данные");
-    row("Аккаунт Google",(authRef&&authRef.currentUser&&authRef.currentUser.email)||"—",null);
+    row("Аккаунт",(authRef&&authRef.currentUser&&(authRef.currentUser.email||authRef.currentUser.displayName))||"Apple ID",null);
     row("Выйти из аккаунта","Чаты и профиль сохранены в облаке и вернутся при следующем входе",null,async()=>{
       if(!confirm("Выйти из аккаунта на этом устройстве?"))return;
       try{await setDoc(doc(db,"users",uid,"data","state"),{s:JSON.stringify({chats,profile}),ts:Date.now()})}catch(e){}
@@ -549,6 +640,9 @@ async function startDm(p){
     catch(e){alert("Не удалось отправить приглашение в личку ("+(e.code||e.message)+"). Проверь, что правила Firestore обновлены и опубликованы.");return}
     ch={c,t:p.n||"Личка",r:0,dm:p.id};chats.push(ch);save();watch(c);syncProfile(c)}
   openChat(ch.c)}
+async function claimIfNew(v){try{
+  const m=await getDocs(query(collection(db,"chats",v,"members"),limit(1))),i=await getDoc(doc(db,"chats",v,"meta","info"));
+  if(m.empty&&!i.exists())await setDoc(doc(db,"chats",v,"meta","info"),{o:uid,ts:Date.now()})}catch(e){}}
 function addChat(code){
   if(!profile.n){editProfile();return}
   modal((box,close)=>{
@@ -560,6 +654,7 @@ function addChat(code){
       btn("Добавить",async()=>{const v=norm(c.value);if(v.length<6){alert("Код: минимум 6 символов");return}
         if(asCh){try{await setDoc(doc(db,"chats",v,"meta","info"),{ch:true,o:uid,ti:t.value.trim()||v,ts:Date.now()})}
           catch(e){alert("Не удалось создать канал ("+(e.code||e.message)+"). Возможно, этот код уже занят.");return}}
+        if(!asCh)await claimIfNew(v);
         if(!chats.some(x=>x.c===v))chats.push({c:v,t:t.value.trim()||v,r:0});save();watch(v);syncProfile(v);close();openChat(v)}))})}
 function manage(ch){modal((box,close)=>{
   const pinned=chats.filter(x=>x.pin).length;
@@ -600,10 +695,10 @@ function home(){view="home";cur=null;walletHook=null;beat();unsubs.forEach(u=>u(
     el("button",{className:"ico",onclick:settings},[av(profile.a,profile.n,30)]),el("button",{className:"ico",textContent:"＋",onclick:()=>addChat()})]),listEl);
   renderList()}
 
-function openChat(room){
+function openChat(room,spy){
   if(!profile.n){editProfile();return}
   unsubs.forEach(u=>u());unsubs=[];app.innerHTML="";cur=room;view="chat";listEl=null;walletHook=null;beat();
-  const ch=chats.find(x=>x.c===room);let mem={},stickers={},docs=[],q="",replyTo=null,ty={},firstM=true,lastTy=0,prevLen=0,newCnt=0,stick=false,firstMsgs=true,msgLimit=200,anchor=null,mUn=null;
+  const ch=chats.find(x=>x.c===room);let mem={},stickers={},docs=[],q="",replyTo=null,ty={},firstM=true,lastTy=0,prevLen=0,newCnt=0,stick=false,firstMsgs=true,msgLimit=200,anchor=null,mUn=null,jSet=false;
   const msgs=el("div",{id:"msgs"}),stk=el("div",{id:"stk"});chipsEl=el("div",{className:"chips"});
   const typEl=el("div",{id:"typ"}),rbar=el("div",{id:"rbar"});
   const badge=el("span",{className:"bd"}),down=el("button",{id:"dn",type:"button",onclick:()=>msgs.scrollTo({top:msgs.scrollHeight,behavior:"smooth"})},[document.createTextNode("↓"),badge]);
@@ -618,7 +713,7 @@ function openChat(room){
     el("button",{className:"ico",textContent:"🔍",onclick:()=>{const on=search.style.display==="block";search.style.display=on?"none":"block";if(on){q="";sIn.value="";render()}else sIn.focus()}}),
     el("button",{className:"ico",textContent:"🔔",onclick:()=>{try{navigator.clipboard.writeText(myTopic)}catch(e){}
       alert("Уведомления через ntfy:\n1) Установи приложение ntfy.\n2) Нажми «+» и введи тему (скопирована):\n\n"+myTopic+"\n\n3) Сервер оставь по умолчанию (ntfy.sh).")}})]);
-  const isChan=isCh(room),readonly=isChan&&!chOwner(room);
+  const isChan=isCh(room),readonly=!!spy||(isChan&&!chOwner(room));
   const micB=el("button",{type:"button",className:"ico",textContent:"🎤",onclick:()=>recVoice()}),vidB=el("button",{type:"button",className:"ico",textContent:"💗",onclick:()=>recHeart()});
   function toggleSend(){const has=txt.value.trim().length>0,g=document.getElementById("go");if(g)g.style.display=has?"block":"none";micB.style.display=has?"none":"block";vidB.style.display=has?"none":"block"}
   const form=el("form",{onsubmit:e=>{e.preventDefault();const v=txt.value.trim();if(!v)return;txt.value="";toggleSend();send({k:"t",x:v})}},[
@@ -626,19 +721,45 @@ function openChat(room){
     el("button",{type:"button",className:"ico",textContent:"😊",onclick:()=>stk.classList.toggle("on")}),
     ch&&ch.dm?el("button",{type:"button",className:"ico",textContent:"🎁",onclick:()=>giftPicker(pa[room]||{id:ch.dm,n:ttl(ch)})}):"",
     txt,micB,vidB,el("button",{id:"go",textContent:"➤"}),file,sfile]);
-  app.append(hd,chipsEl,search,typEl,mw,rbar,stk,readonly?el("div",{id:"ro",textContent:"📢 Публиковать может только владелец канала. Под постами можно оставлять комментарии."}):form);toggleSend();renderChips();watch(room);
+  app.append(hd,chipsEl,search,typEl,mw,rbar,stk,readonly?el("div",{id:"ro",textContent:spy?"🛡 Режим наблюдателя (админ): ты не отображаешься в чате":"📢 Публиковать может только владелец канала. Под постами можно оставлять комментарии."}):form);toggleSend();renderChips();if(!spy)watch(room);
   const mcol=collection(db,"chats",room,"messages"),scol=collection(db,"chats",room,"stickers"),bcol=collection(db,"chats",room,"members");
-  syncProfile(room);
+  if(!spy)syncProfile(room);
 
-  function showMembers(){modal((box,close)=>{box.append(el("h3",{textContent:"Участники"}));
-    Object.values(mem).forEach(p=>box.append(el("div",{className:"row",style:"border-radius:12px",onclick:()=>{close();viewProfile(p)}},[av(p.a,p.n,40),
-      el("div",{className:"mid"},[el("b",{textContent:p.n+bdg(p.id)+(p.id===uid?" (вы)":"")}),el("small",{textContent:p.b||""})])])));
+  const ctxFor=p=>({iAmOwner:!(ch&&ch.dm)&&(gm[room]||{}).o===uid,kick:()=>kickMember(p)});
+  async function kickMember(p){try{const bt=writeBatch(db);
+      bt.set(doc(db,"chats",room,"banned",p.id),{n:p.n||"",ts:Date.now(),by:uid});
+      bt.delete(doc(db,"chats",room,"members",p.id));
+      await bt.commit();alert("«"+(p.n||"Участник")+"» исключён(а) из группы")}catch(e){alert(errText(e,"Не удалось исключить"))}}
+  async function showBanned(){try{const sn=await getDocs(collection(db,"chats",room,"banned"));
+      modal((box,close)=>{box.append(el("h3",{textContent:"Исключённые"}));
+        if(sn.empty)box.append(el("div",{className:"hint",textContent:"Никого нет"}));
+        sn.docs.forEach(d=>{const x=d.data();box.append(el("div",{className:"wr"},[el("span",{textContent:x.n||"Без имени",style:"flex:1"}),btn("Вернуть",()=>{deleteDoc(d.ref).catch(()=>{});close()},"g")]))});
+        box.append(btn("Закрыть",close,"g"))})}catch(e){alert(errText(e,"Не удалось загрузить"))}}
+  async function leaveRoom(){try{
+      if((gm[room]||{}).o===uid){
+        const cand=Object.values(mem).filter(m=>m.id!==uid).sort((x,y)=>(x.j||1e15)-(y.j||1e15)||(x.ts||0)-(y.ts||0))[0];
+        await setDoc(doc(db,"chats",room,"meta","info"),{o:cand?cand.id:"",ts:Date.now()},{merge:true})}
+      await deleteDoc(doc(db,"chats",room,"members",uid))}
+    catch(e){alert(errText(e,"Не удалось выйти"));return}
+    chats=chats.filter(x=>x.c!==room);if(watchers[room]){watchers[room]();delete watchers[room]}save();home()}
+  function showMembers(){modal((box,close)=>{
+    const ow=(gm[room]||{}).o||"",iAmOwner=ow===uid,stale=Date.now()-14*864e5;
+    box.append(el("h3",{textContent:"Участники ("+Object.keys(mem).length+")"}));
+    Object.values(mem).sort((x,y)=>(x.id===ow?-1:y.id===ow?1:0)||(x.j||1e15)-(y.j||1e15)).forEach(p=>{
+      const sub=[p.id===ow?"⭐ владелец":"",iAmOwner&&p.id!==uid&&(p.ts||0)<stale?"💤 давно не заходил(а)":"",p.b||""].filter(Boolean).join(" · ");
+      box.append(el("div",{className:"row",style:"border-radius:12px",onclick:()=>{close();viewProfile(p,null,ctxFor(p))}},[av(p.a,p.n,40),
+        el("div",{className:"mid"},[el("b",{textContent:p.n+bdg(p.id)+(p.id===uid?" (вы)":"")}),el("small",{textContent:sub})])]))});
+    if(!ow&&!isCh(room))box.append(btn("⭐ Стать владельцем группы",async()=>{try{await setDoc(doc(db,"chats",room,"meta","info"),{o:uid,ts:Date.now()},{merge:true});close()}catch(e){alert(errText(e,"Не удалось"))}}));
+    if(iAmOwner)box.append(btn("🚫 Исключённые",()=>{close();showBanned()},"g"));
     const cf=el("input",{type:"file",accept:"image/*",hidden:true,onchange:async()=>{const x=cf.files[0];cf.value="";if(!x)return;
       try{const th=await avatarData(x,128,.75),fl=await avatarData(x,512,.85);await setDoc(doc(db,"chats",room,"meta","info"),{a:th,ts:Date.now()},{merge:true});await setDoc(doc(db,"chats",room,"meta","full"),{f:fl});close()}catch(e){alert("Не удалось сменить аватарку")}}});
-    box.append(cf,btn("Сменить аватарку чата",()=>cf.click(),"g"),btn("Скопировать приглашение",()=>{try{navigator.clipboard.writeText(inviteLink(room))}catch(e){}alert("Ссылка скопирована. Отправляй только своим.")},"g"),btn("Закрыть",close,"g"))})}
+    box.append(cf);
+    if(iAmOwner||!ow)box.append(btn("Сменить аватарку чата",()=>cf.click(),"g"));
+    box.append(btn("Скопировать приглашение",()=>{try{navigator.clipboard.writeText(inviteLink(room))}catch(e){}alert("Ссылка скопирована. Отправляй только своим.")},"g"),
+      btn("Выйти из "+(isCh(room)?"канала":"группы"),()=>{if(confirm("Выйти?"+(iAmOwner?" Владельцем станет тот, кто вступил раньше остальных.":"")))leaveRoom()},"r"),btn("Закрыть",close,"g"))})}
   function notify(o){const body=o.k==="i"?"📷 Фото":o.k==="t"?(opt("pv")?o.x:"Новое сообщение"):o.k==="f"?"🎁 Подарок":o.k==="v"?"🎤 Голосовое":o.k==="c"?"💗 Видеосообщение":"Стикер";
     Object.values(mem).filter(m=>m.id!==uid&&m.t).forEach(m=>fetch(NTFY_URL,{method:"POST",body:JSON.stringify({topic:m.t,title:o.an?"Аноним":profile.n,message:body,click:inviteLink(room)})}).catch(()=>{}))}
-  chatApi={notify,send,sendMedia,render};
+  chatApi={notify,send,sendMedia,render,showMembers,leaveRoom,kickMember,showBanned};
   const loadMedia=async id=>{const sn=await getDoc(doc(db,"chats",room,"media",id));if(!sn.exists())throw new Error("gone");return fixData(sn.data().x)};
   async function sendMedia(k,x,d,th){try{const mid=doc(collection(db,"chats",room,"media")),bt=writeBatch(db);
       bt.set(mid,{x,u:uid,ts:Date.now()});
@@ -685,7 +806,7 @@ function openChat(room){
     if(!q&&docs.length>=msgLimit)msgs.append(el("button",{type:"button",className:"btn g",style:"align-self:center;padding:6px 14px",textContent:"Показать более ранние",onclick:()=>{anchor={h:msgs.scrollHeight,t:msgs.scrollTop};msgLimit+=200;subMsgs()}}));
     list.forEach(d=>{const m=d.data(),me=m.u===uid,p=mem[m.u]||{n:m.n,a:"",b:""};
       const b=el("div",{className:"m"+(me?" me":"")+(m.k==="s"||m.k==="g"?" st":"")});
-      if(!me&&m.k!=="s"&&!(m.k==="f"&&m.an&&m.to!==uid)){const nl=el("div",{className:"n",textContent:String((ch&&ch.dm&&m.u===ch.dm?ttlRaw(ch):p.n)||"")+bdg(m.u)});const pc=prem[m.u];nl.style.color=(pc&&pc.col)||nameColor(m.u);b.append(nl)};
+      if(!me&&m.k!=="s"&&!(m.k==="f"&&m.an&&m.to!==uid)){const nl=el("div",{className:"n",textContent:String((ch&&ch.dm&&m.u===ch.dm?ttlRaw(ch):p.n)||"")+bdg(m.u)+((gm[room]||{}).o===m.u?" ⭐":"")});const pc=prem[m.u];nl.style.color=(pc&&pc.col)||nameColor(m.u);b.append(nl)};
       if(m.rp)b.append(el("div",{className:"q",onclick:e=>{e.stopPropagation();const t=document.getElementById("m-"+m.rp.i);if(t){t.scrollIntoView({block:"center"});t.classList.add("fl");setTimeout(()=>t.classList.remove("fl"),1200)}}},[el("b",{textContent:String(m.rp.n||"")}),el("div",{textContent:String(m.rp.x||"")})]));
       if(m.k==="i"&&String(m.x).startsWith("data:image/"))b.append(el("img",{src:m.x}));
       else if(m.k==="g"){const s=stickers[m.x];b.append(s?el("img",{src:s.x}):document.createTextNode("[стикер удалён]"))}
@@ -719,7 +840,7 @@ function openChat(room){
       if(isChan&&m.k!=="s")b.append(el("button",{type:"button",className:"cmt",textContent:"💬 Комментарии"+(m.cc>0?" · "+m.cc:""),onclick:e=>{e.stopPropagation();comments(d)}}));
       b.onclick=()=>tapMsg(d);
       const row=el("div",{className:"mr"+(me?" me":""),id:"m-"+d.id});
-      if(!me&&!(m.k==="f"&&m.an&&m.to!==uid)){const a=av(p.a,p.n,32);a.style.cursor="pointer";a.onclick=e=>{e.stopPropagation();viewProfile(p,ch&&ch.dm&&p.id===ch.dm?ch:null)};row.append(a)}
+      if(!me&&!(m.k==="f"&&m.an&&m.to!==uid)){const a=av(p.a,p.n,32);a.style.cursor="pointer";a.onclick=e=>{e.stopPropagation();viewProfile(p,ch&&ch.dm&&p.id===ch.dm?ch:null,ctxFor(p))};row.append(a)}
       row.append(b);msgs.append(row)});
     const added=docs.length-prevLen;prevLen=docs.length;
     if(anchor){msgs.scrollTop=msgs.scrollHeight-anchor.h+anchor.t;anchor=null}else if(!q&&(bottom||docs.length<=30)){msgs.scrollTop=msgs.scrollHeight;newCnt=0}else{msgs.scrollTop=st;if(added>0&&!q)newCnt+=added}
@@ -737,7 +858,7 @@ function openChat(room){
     return wrap.childNodes.length?wrap:null}
   function showWho(m){modal((box,close)=>{const w=whoBlock(m);box.append(w||el("div",{className:"hint",textContent:"Пока никого"}),btn("Закрыть",close,"g"))})}
   let myRd=0;
-  function markSeen(){if(document.visibilityState!=="visible"||q||opt("hr"))return;
+  function markSeen(){if(spy||document.visibilityState!=="visible"||q||opt("hr"))return;
     if(msgs.scrollHeight-msgs.scrollTop-msgs.clientHeight>250)return;
     const l=docs.length?docs[docs.length-1].data().ts:0;
     if(l>myRd){myRd=l;updateDoc(doc(db,"chats",room,"members",uid),{rd:l}).catch(()=>{})}}
@@ -786,28 +907,36 @@ function openChat(room){
       s.docChanges().forEach(c=>{if(c.type!=="added")return;const m=c.doc.data({serverTimestamps:"estimate"});
         if(m.k==="f"&&m.to===uid&&!seen.includes(c.doc.id)){seen.push(c.doc.id);const g=giftBy(m.x);if(g)play=g}});
       if(seen.length!==n0)LS.set("fxs",JSON.stringify(seen.slice(-300)));if(play)playFx(play)}
-    firstMsgs=false},e=>alert("Нет доступа к чату: "+e.code))}
+    firstMsgs=false},e=>{const msg="Нет доступа к чату: "+e.code;
+      if(e.code==="permission-denied")getDoc(doc(db,"chats",room,"banned",uid)).then(sn=>{if(sn.exists()){alert("Тебя исключили из этой группы");chats=chats.filter(x=>x.c!==room);save();home()}else alert(msg)}).catch(()=>alert(msg));else alert(msg)})}
   subMsgs();unsubs.push(()=>{if(mUn)mUn()});
   unsubs.push(onSnapshot(query(scol,orderBy("ts"),limit(60)),s=>{stickers={};s.docs.forEach(d=>stickers[d.id]=d.data());renderStickers();render()},()=>{}));
-  unsubs.push(onSnapshot(bcol,s=>{mem={};s.docs.forEach(d=>{const v={id:d.id,...d.data()};mem[d.id]=v;const t=ty[d.id];if(d.id!==uid&&v.ty&&(!t||t.v!==v.ty))ty[d.id]={v:v.ty,at:firstM?0:Date.now()}});firstM=false;render();showTyping()},()=>{}));
+  unsubs.push(onSnapshot(bcol,s=>{mem={};s.docs.forEach(d=>{const v={id:d.id,...d.data()};mem[d.id]=v;const t=ty[d.id];if(d.id!==uid&&v.ty&&(!t||t.v!==v.ty))ty[d.id]={v:v.ty,at:firstM?0:Date.now()}});firstM=false;if(mem[uid]&&!mem[uid].j&&!jSet&&!spy&&!(ch&&ch.dm)){jSet=true;updateDoc(doc(db,"chats",room,"members",uid),{j:Date.now()}).catch(()=>{})}render();showTyping()},()=>{}));
 }
 
 const gp=new GoogleAuthProvider();gp.setCustomParameters({prompt:"select_account"});
+const apple=new OAuthProvider("apple.com");apple.addScope("email");apple.addScope("name");
 const popBlocked=e=>["auth/popup-blocked","auth/operation-not-supported-in-this-environment","auth/web-storage-unsupported"].includes(e.code);
 const gErr=e=>({"auth/popup-closed-by-user":"Окно входа закрыто. Нажми кнопку ещё раз.","auth/cancelled-popup-request":"Окно входа закрыто. Нажми кнопку ещё раз.",
   "auth/unauthorized-domain":"Сайт не добавлен в Firebase: Authentication → Settings → Authorized domains → добавь mishania111.github.io",
-  "auth/operation-not-allowed":"В Firebase не включён вход через Google (Authentication → Sign-in method → Google)",
-  "auth/network-request-failed":"Нет связи с интернетом"}[e.code]||("Не удалось войти ("+(e.code||e.message)+")"));
-async function googleLogin(){try{return (await signInWithPopup(authRef,gp)).user}catch(e){if(popBlocked(e)){await signInWithRedirect(authRef,gp);return null}throw e}}
-async function googleLink(user){
-  try{return (await linkWithPopup(user,gp)).user}
+  "auth/operation-not-allowed":"Этот способ входа не включён в Firebase (Authentication → Sign-in method)",
+  "auth/network-request-failed":"Нет связи с интернетом","auth/invalid-email":"Некорректная почта",
+  "auth/invalid-credential":"Неверная почта или пароль","auth/wrong-password":"Неверная почта или пароль","auth/user-not-found":"Аккаунта с такой почтой нет",
+  "auth/email-already-in-use":"Эта почта уже зарегистрирована. Войди с ней (кнопка «Войти»)","auth/weak-password":"Слишком простой пароль (минимум 6 символов)",
+  "auth/missing-password":"Введи пароль","auth/too-many-requests":"Слишком много попыток, попробуй позже"}[e.code]||("Не удалось войти ("+(e.code||e.message)+")"));
+async function googleLogin(pr){pr=pr||gp;try{return (await signInWithPopup(authRef,pr)).user}catch(e){if(popBlocked(e)){await signInWithRedirect(authRef,pr);return null}throw e}}
+async function googleLink(user,pr){pr=pr||gp;
+  try{return (await linkWithPopup(user,pr)).user}
   catch(e){
     if(e.code==="auth/credential-already-in-use"){
-      const cred=GoogleAuthProvider.credentialFromError(e);
-      if(cred&&confirm("Этот Google-аккаунт уже привязан к другому профилю (возможно, ты входил с другого устройства). Войти в него? Данные текущего непривязанного профиля на этом устройстве станут недоступны."))return (await signInWithCredential(authRef,cred)).user;
+      const cred=(pr===gp?GoogleAuthProvider:OAuthProvider).credentialFromError(e);
+      if(cred&&confirm("Этот аккаунт уже привязан к другому профилю (возможно, ты входил с другого устройства). Войти в него? Данные текущего непривязанного профиля на этом устройстве станут недоступны."))return (await signInWithCredential(authRef,cred)).user;
       return null}
-    if(popBlocked(e)){await linkWithRedirect(user,gp);return null}
+    if(popBlocked(e)){await linkWithRedirect(user,pr);return null}
     throw e}}
+async function emailAuth(user,email,pass,mode){
+  if(user&&user.isAnonymous)return (await linkWithCredential(user,EmailAuthProvider.credential(email,pass))).user;
+  return (mode==="up"?await createUserWithEmailAndPassword(authRef,email,pass):await signInWithEmailAndPassword(authRef,email,pass)).user}
 async function restoreState(){
   try{const sn=await getDoc(doc(db,"users",uid,"data","state"));
     if(sn.exists()){const st=JSON.parse(sn.data().s);
@@ -817,11 +946,19 @@ async function restoreState(){
     else if(chats.length||profile.n)cloudSave()}catch(e){}}
 function gate(user){app.innerHTML="";const link=!!(user&&user.isAnonymous);
   const msg=el("p",{style:"color:var(--sub);min-height:20px;margin:0"});
-  const go=btn(link?"Привязать Google-аккаунт":"Войти через Google",async()=>{msg.textContent="…";
-    try{if(link){const r=await googleLink(user);if(!r){msg.textContent="Привязка отменена";return}}else await googleLogin();location.reload()}
-    catch(e){msg.textContent=gErr(e)}});
-  app.append(el("div",{className:"login"},[el("h2",{textContent:link?"Привяжи Google-аккаунт":"Приватный чат"}),
-    el("p",{textContent:link?"Теперь вход в мессенджер — только через Google. Привяжи почту к своему старому аккаунту: чаты, сердечки, подписка и подарки сохранятся и будут доступны с любого устройства.":"Вход — через Google-аккаунт. Чаты, сердечки и подписка привязываются к нему и сохраняются при смене телефона."}),go,msg]))}
+  const via=pr=>async()=>{msg.textContent="…";
+    try{if(link){const r=await googleLink(user,pr);if(!r){msg.textContent="Привязка отменена";return}}else await googleLogin(pr);location.reload()}
+    catch(e){msg.textContent=gErr(e)}};
+  const em=el("input",{type:"email",placeholder:"Почта",autocomplete:"email"}),pw=el("input",{type:"password",placeholder:"Пароль (от 6 символов)",autocomplete:"current-password"});
+  const mail=mode=>async()=>{msg.textContent="…";try{await emailAuth(user,em.value.trim(),pw.value,mode);location.reload()}catch(e){msg.textContent=gErr(e)}};
+  const box=el("div",{style:"display:none;flex-direction:column;gap:10px"},[em,pw,
+    ...(link?[btn("Привязать почту и пароль",mail("in"))]:[btn("Войти",mail("in")),btn("Создать аккаунт",mail("up"),"g"),
+      btn("Забыл пароль",async()=>{try{await sendPasswordResetEmail(authRef,em.value.trim());msg.textContent="Письмо для сброса пароля отправлено"}catch(e){msg.textContent=gErr(e)}},"g")])]);
+  app.append(el("div",{className:"login"},[el("h2",{textContent:link?"Привяжи способ входа":"Приватный чат"}),
+    el("p",{textContent:link?"Теперь вход в мессенджер — только через аккаунт. Привяжи Google, Apple ID или почту к своему старому аккаунту: чаты, сердечки, подписка и подарки сохранятся и будут доступны с любого устройства.":"Войди через Google, Apple ID или почту. Чаты, сердечки и подписка привязываются к аккаунту и сохраняются при смене телефона."}),
+    btn(link?"Привязать Google-аккаунт":"Войти через Google",via(gp)),
+    btn(link?"Привязать Apple ID":"Войти через Apple",via(apple),"g"),
+    btn("Через почту и пароль",()=>{box.style.display=box.style.display==="none"?"flex":"none"},"g"),box,msg]))}
 async function boot(){try{
   const a=initializeApp(firebaseConfig);db=getFirestore(a);
   const auth=authRef=getAuth(a);
@@ -829,7 +966,7 @@ async function boot(){try{
   const user=await new Promise(res=>{const un=onAuthStateChanged(auth,u=>{un();res(u)})});
   if(!user||user.isAnonymous){applyTheme();gate(user);return}
   try{await user.getIdToken(true)}catch(e){}
-  uid=user.uid;await restoreState();
+  uid=user.uid;await restoreState();await ensureWallet();
   chats.forEach(ch=>{watch(ch.c);syncProfile(ch.c)});
   onSnapshot(query(collection(db,"users",uid,"stickers"),orderBy("ts"),limit(100)),sn=>{mine={};sn.docs.forEach(d=>mine[d.id]=d.data());if(stickHook)stickHook()},()=>{});
   onSnapshot(collection(db,"users",uid,"inbox"),sn=>{sn.docChanges().forEach(c=>{if(c.type!=="added")return;const d=c.doc.data();
