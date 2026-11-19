@@ -126,13 +126,17 @@ html[data-ny="1"] #app{padding-top:22px}:root[data-ny="1"]{--ac:#d9363e}
 .cmt{display:block;margin-top:4px;color:var(--ac);font-size:14px;text-align:left}
 .gtiles{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;width:100%}
 .gt{font-size:28px;background:var(--bg);border-radius:12px;padding:6px 0}
+html,body{overflow:hidden;overscroll-behavior:none;overflow-wrap:anywhere}
+html{height:var(--vh,100%)}
+#msgs{overflow-x:hidden}.m{min-width:0;overflow-wrap:anywhere}
+img,video{max-width:100%}
 </style>
 </head>
 <body>
 <div id="app"></div>
 <script type="module">
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import {getAuth,signInAnonymously} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import {getAuth,onAuthStateChanged,GoogleAuthProvider,signInWithPopup,signInWithRedirect,getRedirectResult,linkWithPopup,linkWithRedirect,signInWithCredential,signOut} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {getFirestore,collection,addDoc,doc,setDoc,getDoc,getDocs,writeBatch,updateDoc,deleteDoc,arrayUnion,arrayRemove,FieldPath,serverTimestamp,increment,query,orderBy,limit,onSnapshot} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -160,7 +164,6 @@ const PROMOS={
   "KITTY":2807,
   "KISS":5,
   "GOD":90000,
-  "SUB":140167
   // "МОЙКОД":25,   <- пример: добавь новую строку по этому образцу
 };
 // =====================================================================
@@ -200,7 +203,7 @@ const J=(k,d)=>{try{return JSON.parse(LS.get(k))||d}catch(e){return d}};
 const el=(t,p,c)=>{const e=document.createElement(t);Object.assign(e,p||{});(c||[]).forEach(x=>e.append(x));return e};
 let db,uid,chats=J("chats",[]),profile=J("profile",{n:LS.get("name")||"",a:"",b:""});
 const pa={},gm={};let mine={},stickHook=null;
-let wallet={h:0,used:[]},myGifts=[],walletHook=null,chatApi=null,walletMsg="",walletErr="",prem={},deferredInstall=null,lastBeat=0,archOpen=false,premErr="";
+let wallet={h:0,used:[]},myGifts=[],walletHook=null,chatApi=null,walletMsg="",walletErr="",prem={},deferredInstall=null,lastBeat=0,archOpen=false,premErr="",authRef=null,cloudT=null;
 const opt=k=>localStorage.getItem(k)==="1";const setOpt=(k,v)=>{try{localStorage.setItem(k,v?"1":"0")}catch(e){}};
 function applyTheme(){const t=LS.get("th")||"auto",d=document.documentElement;
   if(t==="auto")delete d.dataset.theme;else d.dataset.theme=t;
@@ -223,10 +226,12 @@ function nyOn(){nyOff();const W=innerWidth,H=innerHeight,COL=["#ff4d4d","#ffd166
       snowRaf=requestAnimationFrame(step)};step()}
   window.addEventListener("resize",nyOn)}
 window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();deferredInstall=e;if(walletHook)walletHook()});
+if(window.visualViewport){const vv=window.visualViewport,fit=()=>{document.documentElement.style.setProperty("--vh",Math.round(vv.height)+"px");if(vv.offsetTop||window.scrollY)window.scrollTo(0,0)};vv.addEventListener("resize",fit);vv.addEventListener("scroll",fit);fit()}
 if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js").catch(()=>{});
 const last={},watchers={};let cur=null,view="home",unsubs=[],listEl=null,chipsEl=null;
 if(!chats.length&&LS.get("room"))chats.push({c:LS.get("room"),t:LS.get("room"),r:0});
-const save=()=>{LS.set("chats",JSON.stringify(chats));LS.set("profile",JSON.stringify(profile))};
+const save=()=>{LS.set("chats",JSON.stringify(chats));LS.set("profile",JSON.stringify(profile));cloudSave()};
+function cloudSave(){if(!uid||!db)return;clearTimeout(cloudT);cloudT=setTimeout(()=>{setDoc(doc(db,"users",uid,"data","state"),{s:JSON.stringify({chats,profile}),ts:Date.now()}).catch(()=>{})},1500)};
 const myTopic=LS.get("topic")||(()=>{const t="chat"+crypto.randomUUID().replace(/-/g,"").slice(0,20);LS.set("topic",t);return t})();
 const norm=v=>v.trim().toLowerCase().replace(/[^a-zа-я0-9_-]/gi,"");
 const rnd=()=>[...crypto.getRandomValues(new Uint8Array(8))].map(b=>b.toString(16).padStart(2,"0")).join("");
@@ -235,6 +240,8 @@ const inviteLink=c=>location.href.split("#")[0]+"#"+c;
 const REACTS=["👍","❤️","😂","😮","😢","🔥","😘","💀","🤓","😎","🥹","🧐","😤","🤯","😡","😱","🤭","🫪","👎"];
 const audios={},vids={};
 const fmt=s=>Math.floor(s/60)+":"+String(Math.floor(s%60)).padStart(2,"0");
+const cleanType=t=>String(t||"").split(";")[0];
+const fixData=x=>String(x).replace(/^data:([a-z]+\/[a-z0-9.+-]+)[^,]*?(?:,[^;,]*)?;base64,/i,"data:$1;base64,");
 const blobToData=b=>new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(r.result);r.onerror=no;r.readAsDataURL(b)});
 const T=x=>x&&x.ts&&x.ts.toMillis?{...x,ts:x.ts.toMillis()}:x;
 const errText=(e,what)=>(what||"Не удалось отправить")+" ("+(e.code||e.message)+")"+(e.code==="resource-exhausted"?"\nДостигнут дневной лимит бесплатного тарифа Firebase, он сбросится в течение суток.":e.code==="permission-denied"?"\nПроверь, что последние правила Firestore опубликованы.":"");
@@ -427,7 +434,7 @@ function pickQuick(cb){modal((box,close)=>{
 async function recVoice(){const api=chatApi;if(!api)return;
   if(!navigator.mediaDevices||!window.MediaRecorder){alert("Запись звука не поддерживается в этом браузере");return}
   let stream;try{stream=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e){alert("Нет доступа к микрофону");return}
-  const mime=["audio/webm;codecs=opus","audio/mp4","audio/webm"].find(t=>MediaRecorder.isTypeSupported(t))||"";
+  const mime=["audio/mp4","audio/webm;codecs=opus","audio/webm"].find(t=>MediaRecorder.isTypeSupported(t))||"";
   const rec=new MediaRecorder(stream,{...(mime?{mimeType:mime}:{}),audioBitsPerSecond:24000});
   const chunks=[];let ok=false,iv;const t0=Date.now();
   const tm=el("span",{textContent:"0:00",style:"font-weight:600"});
@@ -435,14 +442,14 @@ async function recVoice(){const api=chatApi;if(!api)return;
   const bar=el("div",{id:"recbar"},[btn("✕",()=>{ok=false;stop()},"g"),el("span",{textContent:"●",style:"color:#e53935"}),tm,el("span",{style:"flex:1"}),btn("➤ Отправить",()=>{ok=true;stop()})]);
   rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
   rec.onstop=async()=>{clearInterval(iv);stream.getTracks().forEach(t=>t.stop());bar.remove();const dur=Math.round((Date.now()-t0)/1000);
-    if(!ok||dur<1)return;const x=await blobToData(new Blob(chunks,{type:rec.mimeType||mime}));
+    if(!ok||dur<1)return;const x=await blobToData(new Blob(chunks,{type:cleanType(rec.mimeType||mime)}));
     if(x.length>800000){alert("Голосовое получилось слишком длинным");return}await api.sendMedia("v",x,dur)};
   rec.start();document.body.append(bar);
   iv=setInterval(()=>{const sec=Math.floor((Date.now()-t0)/1000);tm.textContent=fmt(sec);if(sec>=(prem[uid]?180:90)){ok=true;stop()}},250)}
 async function recHeart(){const api=chatApi;if(!api)return;
   if(!navigator.mediaDevices||!window.MediaRecorder){alert("Запись видео не поддерживается в этом браузере");return}
   let stream;try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:360},height:{ideal:360}},audio:true})}catch(e){alert("Нет доступа к камере или микрофону");return}
-  const mime=["video/webm;codecs=vp8,opus","video/webm","video/mp4"].find(t=>MediaRecorder.isTypeSupported(t))||"";
+  const mime=["video/mp4;codecs=avc1.42E01E,mp4a.40.2","video/mp4","video/webm;codecs=vp8,opus","video/webm"].find(t=>MediaRecorder.isTypeSupported(t))||"";
   const vid=el("video",{autoplay:true,playsInline:true});vid.setAttribute("playsinline","");vid.muted=true;vid.srcObject=stream;vid.style.transform="scaleX(-1)";
   const ov=el("div",{className:"ov"}),box=el("div",{className:"box",style:"align-items:center"});ov.append(box);
   const tm=el("div",{textContent:"0:00 / 0:10",style:"font-weight:600"});
@@ -456,7 +463,7 @@ async function recHeart(){const api=chatApi;if(!api)return;
     rec=new MediaRecorder(stream,{...(mime?{mimeType:mime}:{}),videoBitsPerSecond:200000,audioBitsPerSecond:24000});
     rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
     rec.onstop=async()=>{const dur=Math.round((Date.now()-t0)/1000),type=rec.mimeType||mime;cleanup();if(!sendIt||dur<1)return;
-      const x=await blobToData(new Blob(chunks,{type}));if(x.length>800000){alert("Видео получилось слишком тяжёлым, запиши покороче");return}await api.sendMedia("c",x,dur,th)};
+      const x=await blobToData(new Blob(chunks,{type:cleanType(type)}));if(x.length>800000){alert("Видео получилось слишком тяжёлым, запиши покороче");return}await api.sendMedia("c",x,dur,th)};
     t0=Date.now();rec.start();go.textContent="⏹ Отправить";go.className="btn r";
     iv=setInterval(()=>{const sec=Math.floor((Date.now()-t0)/1000);tm.textContent=fmt(sec)+" / 0:10";if(sec>=10)stopSend()},250)});
   box.append(el("div",{className:"heart",style:"width:min(70vw,260px)"},[vid]),tm,go,
@@ -527,7 +534,11 @@ function settings(){walletMsg="";view="settings";cur=null;listEl=null;chipsEl=nu
        if(deferredInstall){deferredInstall.prompt();try{await deferredInstall.userChoice}catch(e){}deferredInstall=null}
        else alert("Android (Chrome): меню ⋮ → «Установить приложение» или «Добавить на главный экран».\niPhone (Safari): «Поделиться» → «На экран Домой».")})}
     sec("Данные");
-    row("Выйти и стереть данные на устройстве","Список чатов, личные стикеры и привязка к профилю пропадут",null,()=>{if(confirm("Точно стереть все данные на этом устройстве? Чаты придётся добавлять заново.")){try{localStorage.clear()}catch(e){}location.reload()}})};
+    row("Аккаунт Google",(authRef&&authRef.currentUser&&authRef.currentUser.email)||"—",null);
+    row("Выйти из аккаунта","Чаты и профиль сохранены в облаке и вернутся при следующем входе",null,async()=>{
+      if(!confirm("Выйти из аккаунта на этом устройстве?"))return;
+      try{await setDoc(doc(db,"users",uid,"data","state"),{s:JSON.stringify({chats,profile}),ts:Date.now()})}catch(e){}
+      try{await signOut(authRef)}catch(e){}try{localStorage.clear()}catch(e){}location.reload()})};
   walletHook=draw;draw()}
 
 async function startDm(p){
@@ -628,17 +639,17 @@ function openChat(room){
   function notify(o){const body=o.k==="i"?"📷 Фото":o.k==="t"?(opt("pv")?o.x:"Новое сообщение"):o.k==="f"?"🎁 Подарок":o.k==="v"?"🎤 Голосовое":o.k==="c"?"💗 Видеосообщение":"Стикер";
     Object.values(mem).filter(m=>m.id!==uid&&m.t).forEach(m=>fetch(NTFY_URL,{method:"POST",body:JSON.stringify({topic:m.t,title:o.an?"Аноним":profile.n,message:body,click:inviteLink(room)})}).catch(()=>{}))}
   chatApi={notify,send,sendMedia,render};
-  const loadMedia=async id=>{const sn=await getDoc(doc(db,"chats",room,"media",id));if(!sn.exists())throw new Error("gone");return sn.data().x};
+  const loadMedia=async id=>{const sn=await getDoc(doc(db,"chats",room,"media",id));if(!sn.exists())throw new Error("gone");return fixData(sn.data().x)};
   async function sendMedia(k,x,d,th){try{const mid=doc(collection(db,"chats",room,"media")),bt=writeBatch(db);
       bt.set(mid,{x,u:uid,ts:Date.now()});
       bt.set(doc(mcol),{k,x:mid.id,d,...(th?{th}:{}),...(replyTo?{rp:replyTo}:{}),u:uid,n:profile.n,ts:serverTimestamp()});
       await bt.commit();notify({k});stick=true;setReply(null)}catch(e){alert(errText(e))}}
-  function bindVoice(id,pl,fill,tt,dur){const a=audios[id]||(audios[id]=new Audio());
+  function bindVoice(id,mid,pl,fill,tt,dur){const a=audios[id]||(audios[id]=new Audio());
     const upd=()=>{const d=a.duration&&isFinite(a.duration)?a.duration:dur,z=a.paused&&!a.currentTime;
       fill.style.width=z?"0":Math.min(100,a.currentTime/d*100)+"%";tt.textContent=z?fmt(dur):fmt(Math.max(0,d-a.currentTime));pl.textContent=a.paused?"▶":"⏸"};
     a.ontimeupdate=upd;a.onpause=upd;a.onplay=upd;a.onended=()=>{a.currentTime=0;upd()};upd();
     pl.onclick=async e=>{e.stopPropagation();if(!a.paused){a.pause();return}
-      if(!a._l){pl.textContent="…";try{a.src=await loadMedia(id);a._l=1}catch(err){pl.textContent="▶";alert("Не удалось загрузить голосовое");return}}
+      if(!a._l){pl.textContent="…";try{a.src=await loadMedia(mid);a._l=1}catch(err){pl.textContent="▶";alert("Не удалось загрузить голосовое");return}}
       Object.values(audios).forEach(o=>{if(o!==a)o.pause()});
       a.play().catch(()=>alert("Не удалось воспроизвести: формат не поддерживается этим браузером"))}}
   function send(o){const rp=replyTo;Promise.resolve().then(()=>addDoc(mcol,{...o,...(rp?{rp}:{}),u:uid,n:profile.n,ts:serverTimestamp()})).then(()=>notify(o)).catch(e=>alert(errText(e)));stick=true;setReply(null)}
@@ -679,13 +690,13 @@ function openChat(room){
       if(m.k==="i"&&String(m.x).startsWith("data:image/"))b.append(el("img",{src:m.x}));
       else if(m.k==="g"){const s=stickers[m.x];b.append(s?el("img",{src:s.x}):document.createTextNode("[стикер удалён]"))}
       else if(m.k==="v"){const pl=el("button",{type:"button",className:"vp",textContent:"▶"}),fill=el("div",{className:"vf"}),tt=el("span",{textContent:fmt(m.d||0),style:"font-size:13px;min-width:34px"});
-        b.append(el("div",{className:"vrow"},[pl,el("div",{className:"vb"},[fill]),tt]));bindVoice(d.id,pl,fill,tt,m.d||0)}
+        b.append(el("div",{className:"vrow"},[pl,el("div",{className:"vb"},[fill]),tt]));bindVoice(d.id,m.x,pl,fill,tt,m.d||0)}
       else if(m.k==="c"){b.className+=" st";let v=vids[d.id];
         if(!v){v=vids[d.id]=el("video",{preload:"none",poster:m.th||""});v.setAttribute("playsinline","");
           v.onclick=async e=>{e.stopPropagation();if(!v.paused){v.pause();return}
             if(!v._l){try{v.src=await loadMedia(m.x);v._l=1}catch(err){alert("Не удалось загрузить видео");return}}
             Object.values(vids).forEach(o=>{if(o!==v)o.pause()});
-            v.play().catch(()=>alert("Не удалось воспроизвести: формат не поддерживается этим браузером"))};
+            v.play().catch(()=>alert("Не удалось воспроизвести видео: формат не поддерживается этим браузером"))};
           v.onended=()=>{v.currentTime=0}}
         b.append(el("div",{className:"hw"},[el("div",{className:"heart"},[v]),el("div",{className:"hd",textContent:"▶ "+fmt(m.d||0)})]))}
       else if(m.k==="f"){const g=giftBy(m.x)||{e:"🎁",n:"Подарок",p:0},anon=m.an&&m.u!==uid&&m.to!==uid;b.className+=" gf";
@@ -781,9 +792,44 @@ function openChat(room){
   unsubs.push(onSnapshot(bcol,s=>{mem={};s.docs.forEach(d=>{const v={id:d.id,...d.data()};mem[d.id]=v;const t=ty[d.id];if(d.id!==uid&&v.ty&&(!t||t.v!==v.ty))ty[d.id]={v:v.ty,at:firstM?0:Date.now()}});firstM=false;render();showTyping()},()=>{}));
 }
 
-try{
+const gp=new GoogleAuthProvider();gp.setCustomParameters({prompt:"select_account"});
+const popBlocked=e=>["auth/popup-blocked","auth/operation-not-supported-in-this-environment","auth/web-storage-unsupported"].includes(e.code);
+const gErr=e=>({"auth/popup-closed-by-user":"Окно входа закрыто. Нажми кнопку ещё раз.","auth/cancelled-popup-request":"Окно входа закрыто. Нажми кнопку ещё раз.",
+  "auth/unauthorized-domain":"Сайт не добавлен в Firebase: Authentication → Settings → Authorized domains → добавь mishania111.github.io",
+  "auth/operation-not-allowed":"В Firebase не включён вход через Google (Authentication → Sign-in method → Google)",
+  "auth/network-request-failed":"Нет связи с интернетом"}[e.code]||("Не удалось войти ("+(e.code||e.message)+")"));
+async function googleLogin(){try{return (await signInWithPopup(authRef,gp)).user}catch(e){if(popBlocked(e)){await signInWithRedirect(authRef,gp);return null}throw e}}
+async function googleLink(user){
+  try{return (await linkWithPopup(user,gp)).user}
+  catch(e){
+    if(e.code==="auth/credential-already-in-use"){
+      const cred=GoogleAuthProvider.credentialFromError(e);
+      if(cred&&confirm("Этот Google-аккаунт уже привязан к другому профилю (возможно, ты входил с другого устройства). Войти в него? Данные текущего непривязанного профиля на этом устройстве станут недоступны."))return (await signInWithCredential(authRef,cred)).user;
+      return null}
+    if(popBlocked(e)){await linkWithRedirect(user,gp);return null}
+    throw e}}
+async function restoreState(){
+  try{const sn=await getDoc(doc(db,"users",uid,"data","state"));
+    if(sn.exists()){const st=JSON.parse(sn.data().s);
+      if(!chats.length&&Array.isArray(st.chats))chats=st.chats;
+      if(!profile.n&&st.profile&&st.profile.n)profile=st.profile;
+      LS.set("chats",JSON.stringify(chats));LS.set("profile",JSON.stringify(profile))}
+    else if(chats.length||profile.n)cloudSave()}catch(e){}}
+function gate(user){app.innerHTML="";const link=!!(user&&user.isAnonymous);
+  const msg=el("p",{style:"color:var(--sub);min-height:20px;margin:0"});
+  const go=btn(link?"Привязать Google-аккаунт":"Войти через Google",async()=>{msg.textContent="…";
+    try{if(link){const r=await googleLink(user);if(!r){msg.textContent="Привязка отменена";return}}else await googleLogin();location.reload()}
+    catch(e){msg.textContent=gErr(e)}});
+  app.append(el("div",{className:"login"},[el("h2",{textContent:link?"Привяжи Google-аккаунт":"Приватный чат"}),
+    el("p",{textContent:link?"Теперь вход в мессенджер — только через Google. Привяжи почту к своему старому аккаунту: чаты, сердечки, подписка и подарки сохранятся и будут доступны с любого устройства.":"Вход — через Google-аккаунт. Чаты, сердечки и подписка привязываются к нему и сохраняются при смене телефона."}),go,msg]))}
+async function boot(){try{
   const a=initializeApp(firebaseConfig);db=getFirestore(a);
-  const cred=await signInAnonymously(getAuth(a));uid=cred.user.uid;
+  const auth=authRef=getAuth(a);
+  try{await getRedirectResult(auth)}catch(e){}
+  const user=await new Promise(res=>{const un=onAuthStateChanged(auth,u=>{un();res(u)})});
+  if(!user||user.isAnonymous){applyTheme();gate(user);return}
+  try{await user.getIdToken(true)}catch(e){}
+  uid=user.uid;await restoreState();
   chats.forEach(ch=>{watch(ch.c);syncProfile(ch.c)});
   onSnapshot(query(collection(db,"users",uid,"stickers"),orderBy("ts"),limit(100)),sn=>{mine={};sn.docs.forEach(d=>mine[d.id]=d.data());if(stickHook)stickHook()},()=>{});
   onSnapshot(collection(db,"users",uid,"inbox"),sn=>{sn.docChanges().forEach(c=>{if(c.type!=="added")return;const d=c.doc.data();
@@ -797,7 +843,8 @@ try{
   const h=norm(decodeURIComponent(location.hash.slice(1)));
   if(h.length>=6){history.replaceState(null,"",location.href.split("#")[0]);addChat(h)}
   else if(!profile.n)editProfile();
-}catch(e){app.innerHTML='';app.append(el("div",{className:"login"},[el("p",{textContent:"Не удалось подключиться к Firebase."}),el("p",{textContent:"Код ошибки: "+(e.code||"нет")+" | "+(e.message||String(e))})]))}
+}catch(e){app.innerHTML='';app.append(el("div",{className:"login"},[el("p",{textContent:"Не удалось подключиться к Firebase."}),el("p",{textContent:"Код ошибки: "+(e.code||"нет")+" | "+(e.message||String(e))})]))}}
+boot();
 </script>
 </body>
 </html>
