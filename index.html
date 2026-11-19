@@ -198,7 +198,7 @@ const PERKS=["💎 Значок с номером покупки рядом с �
 // АДМИНИСТРАТОР — Google-почта(ы) админа. ЭТОТ ЖЕ список должен стоять в правилах Firestore
 // (функция isAdmin в firestore-rules.txt). Замени admin@example.com на свою почту в ОБОИХ местах.
 // =====================================================================
-const ADMIN_EMAILS=["admin@example.com"];
+const ADMIN_EMAILS=["smacksmacks2000@gmail.com"];
 const isAdmin=()=>{const u=authRef&&authRef.currentUser;return !!(u&&u.email&&u.emailVerified&&ADMIN_EMAILS.includes(u.email.toLowerCase()))};
 const PROMO_MAP=Object.fromEntries(Object.entries(PROMOS).map(([k,v])=>[k.trim().toUpperCase(),v]));
 const giftBy=id=>GIFTS.find(g=>g.id===id)||(id==="premium"?PREM_GIFT:null);
