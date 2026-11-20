@@ -137,7 +137,7 @@ img,video{max-width:100%}
 <script type="module">
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {getAuth,onAuthStateChanged,GoogleAuthProvider,OAuthProvider,createUserWithEmailAndPassword,signInWithEmailAndPassword,EmailAuthProvider,linkWithCredential,sendPasswordResetEmail,signInWithPopup,signInWithRedirect,getRedirectResult,linkWithPopup,linkWithRedirect,signInWithCredential,signOut} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import {getFirestore,collection,collectionGroup,Timestamp,addDoc,doc,setDoc,getDoc,getDocs,writeBatch,updateDoc,deleteDoc,arrayUnion,arrayRemove,FieldPath,serverTimestamp,increment,query,orderBy,limit,onSnapshot} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import {getFirestore,collection,collectionGroup,Timestamp,where,documentId,addDoc,doc,setDoc,getDoc,getDocs,writeBatch,updateDoc,deleteDoc,arrayUnion,arrayRemove,FieldPath,serverTimestamp,increment,query,orderBy,limit,onSnapshot} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBoWv-mPq93B7o3HSOwLB0uAh6sleDxpG8",
@@ -198,7 +198,7 @@ const PERKS=["💎 Значок с номером покупки рядом с �
 // АДМИНИСТРАТОР — Google-почта(ы) админа. ЭТОТ ЖЕ список должен стоять в правилах Firestore
 // (функция isAdmin в firestore-rules.txt). Замени admin@example.com на свою почту в ОБОИХ местах.
 // =====================================================================
-const ADMIN_EMAILS=["smacksmacks2000@gmail.com"];
+const ADMIN_EMAILS=["admin@example.com"];
 const isAdmin=()=>{const u=authRef&&authRef.currentUser;return !!(u&&u.email&&u.emailVerified&&ADMIN_EMAILS.includes(u.email.toLowerCase()))};
 const PROMO_MAP=Object.fromEntries(Object.entries(PROMOS).map(([k,v])=>[k.trim().toUpperCase(),v]));
 const giftBy=id=>GIFTS.find(g=>g.id===id)||(id==="premium"?PREM_GIFT:null);
@@ -273,7 +273,7 @@ async function toSticker(f){const im=await loadImg(f);
     let u=c.toDataURL("image/webp",.85);if(!u.startsWith("data:image/webp"))u=c.toDataURL("image/png");if(u.length<140000)return u}
   throw new Error("big")}
 
-function syncProfile(c){if(!profile.n)return;setDoc(doc(db,"chats",c,"members",uid),{n:profile.n,a:profile.a||"",b:profile.b||"",t:(chats.find(x=>x.c===c)||{}).mute?"":myTopic,ts:Date.now()},{merge:true}).catch(()=>{})}
+function syncProfile(c){if(!profile.n)return;setDoc(doc(db,"chats",c,"members",uid),{n:profile.n,a:profile.a||"",b:profile.b||"",un:profile.un||"",t:(chats.find(x=>x.c===c)||{}).mute?"":myTopic,ts:Date.now()},{merge:true}).catch(()=>{})}
 function isUnread(c){const l=last[c],ch=chats.find(x=>x.c===c);return !!(l&&l.u!==uid&&l.ts>(ch?ch.r||0:0))}
 function markRead(){const ch=chats.find(x=>x.c===cur);if(!ch)return;ch.r=Math.max(ch.r||0,last[cur]?last[cur].ts:0);save();renderChips()}
 function watch(c){if(watchers[c])return;const ch=chats.find(x=>x.c===c),us=[];
@@ -283,17 +283,42 @@ function watch(c){if(watchers[c])return;const ch=chats.find(x=>x.c===c),us=[];
   watchers[c]=()=>us.forEach(u=>u())}
 function paint(){view==="home"?renderList():renderChips()}
 
+async function setUsername(un){const old=profile.un||"",bt=writeBatch(db);
+  const data={u:uid,n:profile.n,a:profile.a||"",b:(profile.b||"").slice(0,200),ts:serverTimestamp()};
+  if(un===old){if(un)await updateDoc(doc(db,"usernames",un),{n:data.n,a:data.a,b:data.b,ts:data.ts}).catch(()=>{});return}
+  if(old)bt.delete(doc(db,"usernames",old));
+  if(un){bt.set(doc(db,"usernames",un),data);bt.set(doc(db,"unames",uid),{un})}else bt.delete(doc(db,"unames",uid));
+  await bt.commit();profile.un=un}
 function editProfile(){modal((box,close)=>{
   const n=el("input",{placeholder:"Имя",value:profile.n,maxLength:30});
+  const un=el("input",{placeholder:"@юзернейм (a–z, 0–9, _; 4–20 символов)",value:profile.un?"@"+profile.un:"",maxLength:21,autocapitalize:"none",autocomplete:"off"});
   const b=el("input",{placeholder:"О себе (необязательно)",value:profile.b||"",maxLength:120});
   let a=profile.a||"",af=null;const holder=el("div",{className:"c"});
   const show=()=>{holder.innerHTML="";holder.append(av(a,n.value||profile.n,88))};show();
   const f=el("input",{type:"file",accept:"image/*",hidden:true,onchange:async()=>{const x=f.files[0];f.value="";if(!x)return;try{a=await avatarData(x,128,.75);af=await avatarData(x,512,.85);show()}catch(e){alert("Не удалось загрузить фото")}}});
-  box.append(el("h3",{textContent:"Мой профиль"}),holder,btn("Выбрать фото",()=>f.click(),"g"),n,b,f,
-    btn("Сохранить",()=>{if(!n.value.trim()){alert("Введи имя");return}
-      profile={n:n.value.trim(),a,b:b.value.trim()};save();chats.forEach(ch=>{watch(ch.c);syncProfile(ch.c)});
+  box.append(el("h3",{textContent:"Мой профиль"}),holder,btn("Выбрать фото",()=>f.click(),"g"),n,un,b,f,
+    btn("Сохранить",async()=>{const name=n.value.trim();if(!name){alert("Введи имя");return}
+      const u=un.value.trim().replace(/^@/,"").toLowerCase();
+      if(u&&!/^[a-z][a-z0-9_]{3,19}$/.test(u)){alert("Юзернейм: от 4 до 20 символов, латиница, цифры и _, начинается с буквы");return}
+      const keep=profile.un||"";profile={n:name,a,b:b.value.trim(),un:keep};
+      try{await setUsername(u)}catch(e){profile.un=keep;alert(e.code==="permission-denied"?"Этот юзернейм занят или недоступен. Попробуй другой.":errText(e,"Не удалось сохранить юзернейм"));return}
+      save();chats.forEach(ch=>{watch(ch.c);syncProfile(ch.c)});
       if(af)setDoc(doc(db,"users",uid,"avatar","full"),{f:af}).catch(()=>{});
       close();if(view==="settings")settings();else if(view==="home")home();else openChat(cur)}))})}
+function findUsers(){modal((box,close)=>{
+  const q=el("input",{placeholder:"@юзернейм",autocapitalize:"none",autocomplete:"off"}),list=el("div",{className:"who"}),hint=el("div",{className:"hint",textContent:"Введи юзернейм или его начало"});
+  let tm=0,seq=0;
+  const run=async()=>{const v=q.value.trim().replace(/^@/,"").toLowerCase().replace(/[^a-z0-9_]/g,"");list.innerHTML="";
+    if(v.length<2){hint.textContent="Введи минимум 2 символа";return}
+    const my=++seq;hint.textContent="Ищу…";
+    try{const sn=await getDocs(query(collection(db,"usernames"),where(documentId(),">=",v),where(documentId(),"<",v+"\uf8ff"),limit(20)));
+      if(my!==seq)return;
+      const rows=sn.docs.filter(d=>d.data().u!==uid);hint.textContent=rows.length?"":"Никого не найдено";
+      rows.forEach(d=>{const x=d.data();list.append(el("div",{className:"row",style:"border-radius:12px",onclick:()=>{close();viewProfile({id:x.u,n:x.n,a:x.a,b:x.b||"",un:d.id})}},
+        [av(x.a,x.n,40),el("div",{className:"mid"},[el("b",{textContent:(x.n||"?")+bdg(x.u)}),el("small",{textContent:"@"+d.id})])]))})}
+    catch(e){hint.textContent=errText(e,"Поиск не удался")}};
+  q.oninput=()=>{clearTimeout(tm);tm=setTimeout(run,300)};
+  box.append(el("h3",{textContent:"Поиск людей"}),q,hint,list,btn("Закрыть",close,"g"));setTimeout(()=>q.focus(),50)})}
 const fullAva=id=>getDoc(doc(db,"users",id,"avatar","full")).then(s=>s.exists()?s.data().f:null);
 const fullGroupAva=room=>getDoc(doc(db,"chats",room,"meta","full")).then(s=>s.exists()?s.data().f:null);
 function showPhoto(thumb,loader){if(!thumb)return;
@@ -307,7 +332,7 @@ function viewProfile(p,ch,ctx){modal((box,close)=>{
   const real=p.n||"Без имени",shown=ch&&ch.nick?ch.nick:real;
   const ava=av(p.a,p.n,110);ava.style.cursor="pointer";ava.onclick=()=>viewAva(p);
   const gl=el("div",{className:"who",style:"width:100%;text-align:left"});
-  box.append(el("div",{className:"c"},[ava,el("h3",{textContent:shown+bdg(p.id)}),
+  box.append(el("div",{className:"c"},[ava,el("h3",{textContent:shown+bdg(p.id)}),...(p.un?[el("div",{textContent:"@"+p.un,style:"color:var(--sub)"})]:[]),
     ...(shown!==real?[el("div",{textContent:"Настоящее имя: "+real,style:"color:var(--sub);font-size:13px"})]:[]),
     el("div",{textContent:p.b||"Пока ничего о себе не рассказал(а)",style:"color:var(--sub)"}),gl]));
   if(p.id)getDocs(query(collection(db,"users",p.id,"gifts"),orderBy("ts","desc"),limit(300))).then(sn=>{const items=sn.docs.map(d=>d.data()).filter(x=>!x.h);if(!items.length)return;
@@ -604,6 +629,7 @@ function settings(){walletMsg="";view="settings";cur=null;listEl=null;chipsEl=nu
     body.append(el("div",{className:"card"},[el("div",{textContent:"Мои сердечки"}),el("div",{className:"big",textContent:"❤️ "+(wallet.h||0)}),
       el("div",{className:"pr"},[inp,btn("Активировать",async()=>{walletMsg="…";draw();try{walletMsg=await redeem(inp.value)}catch(e){walletMsg="Не удалось активировать ("+(e.code||e.message||"ошибка")+")"}draw()})]),msg,
       el("div",{textContent:"Сердечки даются только по промокодам. Дарить подарки можно из профиля человека или кнопкой 🎁 в личке.",style:"color:var(--sub);font-size:13px"})]));
+    sec("Профиль");row("Юзернейм",profile.un?"Тебя можно найти по @"+profile.un:"Не задан — по нему тебя смогут найти другие",pill(profile.un?"@"+profile.un:"Задать"),editProfile);
     sec("Подарки");row("Мои подарки",myGifts.slice(0,8).map(x=>(giftBy(x.g)||{e:"🎁"}).e).join("")||"Пока нет",pill(String(myGifts.length)),showMyGifts);tog("Скрывать новые подарки в профиле","Новые подарки сразу скрываются от других (когда приложение открыто)","hn");
     sec("Внешний вид");const th=LS.get("th")||"auto";
     row("Тема",null,pill({auto:"Авто",light:"Светлая",dark:"Тёмная"}[th]),()=>{LS.set("th",{auto:"light",light:"dark",dark:"auto"}[th]);applyTheme();draw()});
@@ -692,7 +718,7 @@ function renderChips(){if(!chipsEl)return;chipsEl.innerHTML="";
 function home(){view="home";cur=null;walletHook=null;beat();unsubs.forEach(u=>u());unsubs=[];chipsEl=null;app.innerHTML="";
   listEl=el("div",{id:"list"});
   app.append(el("header",{},[el("b",{textContent:"Чаты"}),
-    el("button",{className:"ico",onclick:settings},[av(profile.a,profile.n,30)]),el("button",{className:"ico",textContent:"＋",onclick:()=>addChat()})]),listEl);
+    el("button",{className:"ico",textContent:"🔍",onclick:findUsers}),el("button",{className:"ico",onclick:settings},[av(profile.a,profile.n,30)]),el("button",{className:"ico",textContent:"＋",onclick:()=>addChat()})]),listEl);
   renderList()}
 
 function openChat(room,spy){
